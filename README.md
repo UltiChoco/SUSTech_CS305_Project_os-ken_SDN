@@ -10,7 +10,7 @@
 **os-ken**: os-ken is an open-source framework for building SDN controllers. After we build a virtual SDN network using Mininet, we use os-ken to write and deploy the SDN controller. An os-ken controller can communicate with the virtual switches in Mininet to control the behaviors of the virtual network. The figure below shows the overall architecture of os-ken and Mininet. os-ken monitors network traffic in switches to take corresponding actions (such as how to forward), while Mininet is responsible for the actual transmission of network traffic.
 
 <p align="center">
-  <img src="./img/arch.png" width="30%"/>
+  <img src="./img/arch.png" width="60%"/>
 </p>
 
 In this project, we will write a os-ken controller to support two main functions:
