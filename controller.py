@@ -41,6 +41,7 @@ class ControllerApp(app_manager.OSKenApp):
     def __init__(self, *args, **kwargs):
         super(ControllerApp, self).__init__(*args, **kwargs)
         self._init_topology()
+        self.firewall = Firewall()
 
     def _init_topology(self):
         """Initialize network topology data structures
@@ -60,6 +61,7 @@ class ControllerApp(app_manager.OSKenApp):
         self.mac_to_loc = {}
         self.ip_to_mac = {}
 
+    @set_ev_cls(event.EventSwitchEnter)
     def _handle_switch_add(self, ev):
         """Handle switch up event -- EventSwitchEnter
 
@@ -79,6 +81,7 @@ class ControllerApp(app_manager.OSKenApp):
 
         ofctl = OfCtl.factory(dp, self.logger)
         ofctl.set_packetin_flow(cookie=0, priority=0)
+        self.firewall.install_rules({dpid: ofctl})
 
         self.logger.info('Switch joined: dpid=%016x', dpid)
 

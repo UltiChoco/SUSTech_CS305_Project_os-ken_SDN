@@ -20,6 +20,21 @@ class FirewallRule:
 class Firewall:
     COOKIE = 0x305F
     PRIORITY = 60000
+    DEFAULT_RULES = [
+        FirewallRule(
+            src_ip="192.168.117.2",
+            dst_ip="192.168.117.3",
+            proto="icmp",
+            action="deny",
+        ),
+        FirewallRule(
+            src_ip="192.168.117.2",
+            dst_ip="192.168.117.3",
+            proto="tcp",
+            dst_port=80,
+            action="deny",
+        ),
+    ]
 
     PROTO_MAP = {
         None: 0,
@@ -66,12 +81,43 @@ class Firewall:
         """
         rules = []
 
-        # TODO: read rule_file
-        # TODO: parse JSON rules
-        # TODO: create FirewallRule objects
-        # TODO: append them into rules
+        path = rule_file
+        if not os.path.exists(path) and rule_file == "firewall_rules.json":
+            fallback = "firewall_rule.json"
+            if os.path.exists(fallback):
+                path = fallback
+
+        if not os.path.exists(path):
+            return list(self.DEFAULT_RULES)
+
+        with open(path, "r") as fp:
+            data = json.load(fp)
+
+        for item in data.get("rules", []):
+            rules.append(FirewallRule(
+                src_ip=self._normalize_any(item.get("src_ip")),
+                dst_ip=self._normalize_any(item.get("dst_ip")),
+                proto=self._normalize_proto(item.get("proto")),
+                src_port=self._normalize_any(item.get("src_port")),
+                dst_port=self._normalize_any(item.get("dst_port")),
+                action=str(item.get("action", "deny")).lower(),
+            ))
 
         return rules
+
+    def _is_valid_port(self, port):
+        return 0 <= port <= 65535
+
+    def _flow_key(self, dpid, rule, proto_num, src_port, dst_port):
+        return (
+            dpid,
+            rule.src_ip,
+            rule.dst_ip,
+            proto_num,
+            src_port,
+            dst_port,
+            rule.action,
+        )
 
     def install_rules(self, ofctls):
         """
@@ -79,17 +125,39 @@ class Firewall:
         """
         for dpid, ofctl in ofctls.items():
             for rule in self.rules:
+                if rule.action != "deny":
+                    continue
 
-                # TODO: only handle deny rules
+                proto = self._normalize_proto(rule.proto)
+                if proto not in self.PROTO_MAP:
+                    continue
 
-                # TODO: convert protocol name to protocol number
+                proto_num = self._proto_to_number(proto)
+                try:
+                    src_port = self._normalize_port(rule.src_port)
+                    dst_port = self._normalize_port(rule.dst_port)
+                except (TypeError, ValueError):
+                    continue
 
-                # TODO: normalize source and destination ports
+                if not self._is_valid_port(src_port) or not self._is_valid_port(dst_port):
+                    continue
 
-                # TODO: skip invalid port rules
+                if (src_port or dst_port) and proto_num not in (inet.IPPROTO_TCP, inet.IPPROTO_UDP):
+                    continue
 
-                # TODO: avoid duplicated flow installation
+                key = self._flow_key(dpid, rule, proto_num, src_port, dst_port)
+                if key in self.installed:
+                    continue
 
-                # TODO: use ofctl.set_flow() to install a high-priority drop flow
-
-                pass
+                ofctl.set_flow(
+                    cookie=self.COOKIE,
+                    priority=self.PRIORITY,
+                    dl_type=ether.ETH_TYPE_IP,
+                    nw_src=rule.src_ip or 0,
+                    nw_dst=rule.dst_ip or 0,
+                    nw_proto=proto_num,
+                    tp_src=src_port,
+                    tp_dst=dst_port,
+                    actions=[],
+                )
+                self.installed.add(key)
