@@ -13,6 +13,7 @@ from os_ken.lib.packet import ipv4
 from os_ken.lib.packet import packet
 from os_ken.lib.packet import udp
 from dhcp import DHCPServer
+from dns_server import DNSServer
 from collections import defaultdict
 import time
 from ofctl_utilis import OfCtl, OfCtl_v1_0, OfCtl_after_v1_2, VLANID_NONE
@@ -60,6 +61,7 @@ class ControllerApp(app_manager.OSKenApp):
         self.dpid_to_dp = {}
         self.mac_to_loc = {}
         self.ip_to_mac = {}
+        self.ip_to_mac["192.168.1.1"] = "7e:49:b3:f0:f9:99"
 
     @set_ev_cls(event.EventSwitchEnter)
     def _handle_switch_add(self, ev):
@@ -479,6 +481,11 @@ class ControllerApp(app_manager.OSKenApp):
                 return
 
             pkt_ip = pkt.get_protocol(ipv4.ipv4)
+            pkt_udp = pkt.get_protocol(udp.udp)
+            if pkt_ip and pkt_udp and pkt_udp.dst_port == 53:
+                DNSServer.handle_dns(datapath, in_port, pkt)
+                return
+
             pkt_eth = pkt.get_protocol(ethernet.ethernet)
             if pkt_ip and pkt_eth:
                 dst_mac = pkt_eth.dst

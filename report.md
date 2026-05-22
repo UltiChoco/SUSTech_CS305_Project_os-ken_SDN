@@ -294,6 +294,32 @@ From Figure 2, the following results can be observed:
    `DECLINE timeout released ip=192.168.1.4`,  
    indicating that the server correctly cleans expired temporary states.
 
+## DNS Implementation
+
+Only support UDP/53 A record queries, and answers are generated from a static table in `dns_server.py`. Unknown names return NXDOMAIN (or a formatted failure response). No recursion, no external DNS, and no TCP DNS are supported.
+
+## Testing
+
+**Terminal 1:**
+```bash
+cd /home/mininet/CS305-2026Spring-Project
+osken-manager --observe-links controller.py
+```
+
+**Terminal 2:**
+```bash
+cd /home/mininet/CS305-2026Spring-Project/tests/dhcp_test
+sudo env "PATH=$PATH" python test_network.py
+```
+**manual test**
+### Run commands in Mininet CLI
+```
+h1 ifconfig
+h2 ifconfig
+h1 nslookup web.local 192.168.1.1
+h1 nslookup h2.local 192.168.1.1
+h1 nslookup unknown.local 192.168.1.1
+```
 
 
 
