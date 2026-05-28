@@ -1,0 +1,63 @@
+site_name: CS305 SDN 控制器
+site_description: CS305 计算机网络课程项目 — 基于 os-ken 的 SDN 控制器，实现 DHCP、最短路径交换、防火墙和 DNS
+
+nav:
+  - 首页: index.md
+  - 指南:
+    - 环境搭建: guide/getting-started.md
+    - 运行控制器: guide/run-controller.md
+    - 测试: guide/testing.md
+    - 架构: guide/architecture.md
+  - API 参考:
+    - 概览: api/index.md
+    - ControllerApp: api/controller.md
+    - DHCPServer: api/dhcp.md
+    - Firewall: api/firewall.md
+    - DNSServer: api/dns.md
+  - 变更日志: changelog.md
+
+theme:
+  name: material
+  language: zh
+  font:
+    text: Roboto
+    code: Roboto Mono
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: 切换深色模式
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: 切换浅色模式
+  features:
+    - content.code.copy
+    - navigation.top
+    - navigation.sections
+    - navigation.indexes
+  custom_dir: docs/overrides
+
+markdown_extensions:
+  - admonition
+  - codehilite
+  - pymdownx.tilde
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - toc:
+      permalink: true
+
+extra_css:
+  - stylesheets/extra.css
+
+extra:
+  generator: false

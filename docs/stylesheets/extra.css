@@ -1,0 +1,17 @@
+/* mkdocs-template custom styles */
+
+.md-grid {
+  max-width: 100%;
+}
+
+.md-header {
+  background: var(--md-primary-fg-color);
+}
+
+.md-footer {
+  background: var(--md-primary-fg-color--dark);
+}
+
+.md-sidebar--primary .md-nav__title {
+  font-weight: 700;
+}
