@@ -89,6 +89,25 @@ class ControllerApp(app_manager.OSKenApp):
 
     @set_ev_cls(event.EventSwitchLeave)
     def handle_switch_delete(self, ev):
+        """Handle switch down event -- EventSwitchLeave
+
+        Cleans up all topology state related to the departing switch:
+        - Removes the switch node from the adjacency graph
+        - Removes edges pointing to this switch from all neighbours
+        - Removes the Datapath object record
+        """
+        dp = ev.switch.dp
+        dpid = dp.id
+
+        if dpid in self.graph:
+            del self.graph[dpid]
+
+        for neighbor_dpid in list(self.graph.keys()):
+            if dpid in self.graph[neighbor_dpid]:
+                del self.graph[neighbor_dpid][dpid]
+
+        if dpid in self.dpid_to_dp:
+            del self.dpid_to_dp[dpid]
 
         self.logger.info('Switch left: dpid=%016x', dpid)
 
