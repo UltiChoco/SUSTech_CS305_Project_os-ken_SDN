@@ -21,6 +21,7 @@ import logging
 import copy
 import heapq
 from firewall import Firewall
+from nat import NATServer, NATConfig
 
 
 class ControllerApp(app_manager.OSKenApp):
@@ -441,6 +442,23 @@ class ControllerApp(app_manager.OSKenApp):
         if arp_pkt.opcode == arp.ARP_REQUEST:
             self.logger.info('Received ARP request: who-has %s tell %s', dst_ip, src_ip)
 
+            if NATServer.is_external(dst_ip):
+                self.logger.info('NAT Proxy ARP: %s is-at %s (to %s)',
+                                 dst_ip, NATConfig.server_mac, src_ip)
+                ofctl = OfCtl.factory(datapath, self.logger)
+                ofctl.send_arp(
+                    arp_opcode=arp.ARP_REPLY,
+                    vlan_id=VLANID_NONE,
+                    dst_mac=src_mac,
+                    sender_mac=NATConfig.server_mac,
+                    sender_ip=dst_ip,
+                    target_mac=src_mac,
+                    target_ip=src_ip,
+                    src_port=datapath.ofproto.OFPP_CONTROLLER,
+                    output_port=in_port
+                )
+                return
+
             target_mac = self.ip_to_mac.get(dst_ip)
             if target_mac:
                 self.logger.info('Proxy ARP reply: %s is-at %s (to %s)',
@@ -578,6 +596,9 @@ class ControllerApp(app_manager.OSKenApp):
 
             pkt_eth = pkt.get_protocol(ethernet.ethernet)
             if pkt_ip and pkt_eth:
+                if NATServer.handle_nat(datapath, in_port, pkt, self):
+                    return
+
                 dst_mac = pkt_eth.dst
                 dst_ip = pkt_ip.dst
                 src_mac = pkt_eth.src

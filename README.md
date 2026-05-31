@@ -138,18 +138,25 @@ In this section, we will combine the experimental framework code to introduce th
 ### Experimental Framework
 We provide some basic starter programs to help you start with this project. The project structure is as follows.
 ```
-├── controller.py  # The main file of the controller
-├── dhcp.py   # Implement DHCP server here
-├── firewall.py # Implement firewall here
-├── ofctl_utilis.py # Don't need to modify this file, it provides useful functions for building and sending packets
-├── requirements.txt 
+├── controller.py       # The main file of the controller
+├── dhcp.py             # Implement DHCP server here
+├── dns_server.py       # Bonus: DNS server
+├── nat.py              # Bonus: NAT gateway (SNAT/DNAT)
+├── firewall.py         # Implement firewall here
+├── firewall_rule.json  # Firewall rule definitions
+├── ofctl_utilis.py     # Don't need to modify this file
+├── requirements.txt
 └── tests
     ├── dhcp_test
+    │   ├── test_network.py
+    │   └── test_dhcp_bonus.py
+    ├── switching_test
     │   └── test_network.py
-    └── switching_test
+    ├── firewall_test
     │   └── test_network.py
-    └── firewall_test
-        └── test_network.py
+    ├── nat_test
+    │   └── test_network.py
+    └── firewall_unit_test.py
 ```
 
 - `controller.py`: This file is the entry point of the project. You should implement monitoring of network components in the SDN network, addition and deletion, data flow through switches, and trigger DHCP or shortest path switching functions based on collected information.
@@ -336,10 +343,10 @@ Here is a TENTATIVE grading rule for your project:
 
 You may implement some of the following features to get bonus points. We will decide your bonus points based on the completeness, complexity, and difficulty of your implemented functions.
 
-- Implement the function of DHCP lease duration.
-- Design the DHCP function according to the RFC protocol to ensure that DHCP does not duplicate IP allocation.
-- Implement different routing algorithms.
-- Implement more functions using os-ken, such as DNS, and NAT.
+- Implement the function of DHCP lease duration. ***(DONE)***
+- Design the DHCP function according to the RFC protocol to ensure that DHCP does not duplicate IP allocation. ***(DONE — full RFC: NAK, RELEASE, DECLINE, lease/offer expiry)***
+- Implement different routing algorithms. ***(DONE — Dijkstra + Bellman-Ford, switchable via `ROUTING_ALGORITHM`)***
+- Implement more functions using os-ken, such as DNS, and NAT. ***(DONE — DNS (`dns_server.py`) + NAT (`nat.py`, ICMP SNAT/DNAT))***
 - Use Mininet to study more network features you have learned in the computer network course, such as TCP behaviors, TCP Reno versus TCP Tahoe, and [Bufferbloat](https://en.wikipedia.org/wiki/Bufferbloat) problem.
 - More that you can think of. Please discuss with the instructors first.
 
