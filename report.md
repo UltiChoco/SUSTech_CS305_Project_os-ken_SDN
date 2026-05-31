@@ -319,7 +319,6 @@ h2 ifconfig
 h1 nslookup web.local 192.168.1.1
 h1 nslookup h2.local 192.168.1.1
 h1 nslookup unknown.local 192.168.1.1
+h1 nslookup -type=AAAA web.local 192.168.1.1
+h1 nslookup -type=CNAME www.local 192.168.1.1
 ```
-
-
-

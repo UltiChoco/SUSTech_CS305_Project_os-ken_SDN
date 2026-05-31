@@ -4,8 +4,8 @@ This document describes the controller-based DNS responder and how to test it.
 
 ## Overview
 - A simple DNS responder runs inside the controller.
-- It only handles UDP/53 A record queries.
-- Answers are generated from a static table in `dns_server.py`.
+ - It handles UDP/53 A, AAAA, and CNAME record queries.
+ - Answers are generated from static tables in `dns_server.py`.
 - Unknown names return NXDOMAIN (or a formatted failure response).
 - No recursion, no external DNS, and no TCP DNS are supported.
 
@@ -19,8 +19,8 @@ This document describes the controller-based DNS responder and how to test it.
 1. PacketIn arrives at the controller.
 2. DHCP packets are handled first, ARP packets second.
 3. If IPv4 + UDP + dst_port == 53, the packet is sent to `DNSServer.handle_dns()`.
-4. The DNS handler parses the question and only accepts A/IN queries.
-5. If the name exists in `DNS_TABLE`, the controller builds a response with TTL=60.
+4. The DNS handler parses the question and accepts A/AAAA/CNAME with class IN.
+5. If the name exists in the DNS tables, the controller builds a response with TTL=60.
 6. If the name does not exist, the controller returns NXDOMAIN (or a formatted failure response).
 7. The response is sent back with PacketOut on the original input port.
 
@@ -49,5 +49,7 @@ h2 ifconfig
 h1 nslookup web.local 192.168.1.1
 h1 nslookup h2.local 192.168.1.1
 h1 nslookup unknown.local 192.168.1.1
+h1 nslookup -type=AAAA web.local 192.168.1.1
+h1 nslookup -type=CNAME www.local 192.168.1.1
 ```
 

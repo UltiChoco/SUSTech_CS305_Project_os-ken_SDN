@@ -17,6 +17,14 @@ class DNSServer:
         "h2.local": "192.168.1.3",
         "web.local": "192.168.1.3",
     }
+    DNS_AAAA_TABLE = {
+        "h1.local": "fd00::2",
+        "h2.local": "fd00::3",
+        "web.local": "fd00::3",
+    }
+    DNS_CNAME_TABLE = {
+        "www.local": "web.local",
+    }
     DEFAULT_TTL = 60
 
     @classmethod
@@ -89,18 +97,77 @@ class DNSServer:
 
         qname, qtype, qclass, query_bytes = query
 
-        if qtype != 1 or qclass != 1:
+        if qclass != 1 or qtype not in {1, 5, 28}:
             return cls._build_error_response(transaction_id, rd_flag, 4, query_bytes=query_bytes)
 
         normalized = qname.rstrip(".").lower()
-        ip_addr = cls.DNS_TABLE.get(normalized)
-        if not ip_addr:
+        answers = []
+
+        if qtype == 1:
+            cname_target = cls.DNS_CNAME_TABLE.get(normalized)
+            if cname_target:
+                answers.append(cls._build_cname_answer(cname_target))
+                target_key = cname_target.rstrip(".").lower()
+                ip_addr = cls.DNS_TABLE.get(target_key)
+                if ip_addr:
+                    answers.append(cls._build_a_answer(ip_addr))
+                return cls._build_response_with_answers(
+                    transaction_id, rd_flag, query_bytes, answers
+                )
+
+            ip_addr = cls.DNS_TABLE.get(normalized)
+            if ip_addr:
+                answers.append(cls._build_a_answer(ip_addr))
+                return cls._build_response_with_answers(
+                    transaction_id, rd_flag, query_bytes, answers
+                )
+
+            if cls._name_exists(normalized):
+                return cls._build_response_with_answers(
+                    transaction_id, rd_flag, query_bytes, answers
+                )
+
             return cls._build_error_response(transaction_id, rd_flag, 3, query_bytes=query_bytes)
 
-        answer = cls._build_a_answer(ip_addr)
-        flags_resp = 0x8000 | 0x0400 | rd_flag
-        header_bytes = struct.pack("!HHHHHH", transaction_id, flags_resp, 1, 1, 0, 0)
-        return header_bytes + query_bytes + answer
+        if qtype == 28:
+            cname_target = cls.DNS_CNAME_TABLE.get(normalized)
+            if cname_target:
+                answers.append(cls._build_cname_answer(cname_target))
+                target_key = cname_target.rstrip(".").lower()
+                ip_addr = cls.DNS_AAAA_TABLE.get(target_key)
+                if ip_addr:
+                    answers.append(cls._build_aaaa_answer(ip_addr))
+                return cls._build_response_with_answers(
+                    transaction_id, rd_flag, query_bytes, answers
+                )
+
+            ip_addr = cls.DNS_AAAA_TABLE.get(normalized)
+            if ip_addr:
+                answers.append(cls._build_aaaa_answer(ip_addr))
+                return cls._build_response_with_answers(
+                    transaction_id, rd_flag, query_bytes, answers
+                )
+
+            if cls._name_exists(normalized):
+                return cls._build_response_with_answers(
+                    transaction_id, rd_flag, query_bytes, answers
+                )
+
+            return cls._build_error_response(transaction_id, rd_flag, 3, query_bytes=query_bytes)
+
+        cname_target = cls.DNS_CNAME_TABLE.get(normalized)
+        if cname_target:
+            answers.append(cls._build_cname_answer(cname_target))
+            return cls._build_response_with_answers(
+                transaction_id, rd_flag, query_bytes, answers
+            )
+
+        if cls._name_exists(normalized):
+            return cls._build_response_with_answers(
+                transaction_id, rd_flag, query_bytes, answers
+            )
+
+        return cls._build_error_response(transaction_id, rd_flag, 3, query_bytes=query_bytes)
 
     @classmethod
     def _parse_header(cls, data):
@@ -168,11 +235,62 @@ class DNSServer:
         return name, offset
 
     @classmethod
+    def _encode_qname(cls, name):
+        if name == "":
+            return b"\x00"
+        parts = name.rstrip(".").split(".")
+        out = bytearray()
+        for part in parts:
+            if not part:
+                continue
+            part_bytes = part.encode("ascii", "ignore")
+            out.append(len(part_bytes))
+            out.extend(part_bytes)
+        out.append(0)
+        return bytes(out)
+
+    @classmethod
     def _build_a_answer(cls, ip_addr):
         name_ptr = b"\xc0\x0c"
         rr_header = struct.pack("!HHIH", 1, 1, cls.DEFAULT_TTL, 4)
         rdata = addrconv.ipv4.text_to_bin(ip_addr)
         return name_ptr + rr_header + rdata
+
+    @classmethod
+    def _build_aaaa_answer(cls, ip_addr):
+        name_ptr = b"\xc0\x0c"
+        rr_header = struct.pack("!HHIH", 28, 1, cls.DEFAULT_TTL, 16)
+        rdata = addrconv.ipv6.text_to_bin(ip_addr)
+        return name_ptr + rr_header + rdata
+
+    @classmethod
+    def _build_cname_answer(cls, target_name):
+        name_ptr = b"\xc0\x0c"
+        rdata = cls._encode_qname(target_name)
+        rr_header = struct.pack("!HHIH", 5, 1, cls.DEFAULT_TTL, len(rdata))
+        return name_ptr + rr_header + rdata
+
+    @classmethod
+    def _build_response_with_answers(cls, transaction_id, rd_flag, query_bytes, answers):
+        flags_resp = 0x8000 | 0x0400 | rd_flag
+        header_bytes = struct.pack(
+            "!HHHHHH",
+            transaction_id,
+            flags_resp,
+            1,
+            len(answers),
+            0,
+            0,
+        )
+        return header_bytes + query_bytes + b"".join(answers)
+
+    @classmethod
+    def _name_exists(cls, normalized_name):
+        return (
+            normalized_name in cls.DNS_TABLE
+            or normalized_name in cls.DNS_AAAA_TABLE
+            or normalized_name in cls.DNS_CNAME_TABLE
+        )
 
     @classmethod
     def _build_error_response(cls, transaction_id, rd_flag, rcode, query_bytes=b""):
