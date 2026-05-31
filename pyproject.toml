@@ -1,0 +1,13 @@
+[project]
+name = "cs305-sdn-controller"
+version = "0.1.0"
+description = "CS305 SDN controller using os-ken to manage Mininet-emulated networks via OpenFlow 1.0"
+requires-python = ">=3.8"
+dependencies = [
+    "os-ken<4",
+    "mininet==2.3.0.dev6",
+    "eventlet==0.29.1",
+]
+
+[tool.uv]
+package = false

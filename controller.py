@@ -39,6 +39,8 @@ class ControllerApp(app_manager.OSKenApp):
     FORWARDING_COOKIE = 0x1000
     FORWARDING_PRIORITY = 1000
 
+    ROUTING_ALGORITHM = "dijkstra"  # "dijkstra" or "bellman_ford"
+
     def __init__(self, *args, **kwargs):
         super(ControllerApp, self).__init__(*args, **kwargs)
         self._init_topology()
@@ -270,6 +272,75 @@ class ControllerApp(app_manager.OSKenApp):
         path.reverse()
         return path
 
+    def _bellman_ford(self, src_dpid, dst_dpid):
+        """Bellman-Ford Shortest Path Algorithm
+
+        Calculates the shortest path from source switch to destination switch
+        on the switch adjacency graph self.graph. All edge weights are 1 (hop count),
+        using the classic relaxation approach.
+
+        Args:
+            src_dpid: Source switch DPID (int)
+            dst_dpid: Destination switch DPID (int)
+
+        Returns:
+            Success: list of (dpid, out_port) -- Forwarding rules for intermediate
+                     switches on the path
+            Failure: None -- No path exists from src to dst
+            Same switch: [] -- Empty list means src and dst are on the same switch
+        """
+        if src_dpid == dst_dpid:
+            return []
+
+        if src_dpid not in self.graph or dst_dpid not in self.graph:
+            self.logger.warning('Bellman-Ford: Node not in graph, src=%016x, dst=%016x',
+                                src_dpid, dst_dpid)
+            return None
+
+        nodes = list(self.graph.keys())
+        dist = {node: float('inf') for node in nodes}
+        dist[src_dpid] = 0
+
+        prev_node = {}
+        prev_port = {}
+
+        for _ in range(len(nodes) - 1):
+            updated = False
+            for u in nodes:
+                if dist[u] == float('inf'):
+                    continue
+                for v, port in self.graph[u].items():
+                    alt = dist[u] + 1
+                    if alt < dist[v]:
+                        dist[v] = alt
+                        prev_node[v] = u
+                        prev_port[v] = port
+                        updated = True
+            if not updated:
+                break
+
+        if dist[dst_dpid] == float('inf'):
+            self.logger.warning('Bellman-Ford: No path found, src=%016x, dst=%016x',
+                                src_dpid, dst_dpid)
+            return None
+
+        path = []
+        curr = dst_dpid
+        while curr != src_dpid:
+            prev = prev_node[curr]
+            port = prev_port[curr]
+            path.append((prev, port))
+            curr = prev
+
+        path.reverse()
+        return path
+
+    def _shortest_path(self, src_dpid, dst_dpid):
+        """Dispatch to the configured shortest-path algorithm."""
+        if self.ROUTING_ALGORITHM == "bellman_ford":
+            return self._bellman_ford(src_dpid, dst_dpid)
+        return self._dijkstra(src_dpid, dst_dpid)
+
     def _install_path_flows(self, src_dpid, dst_dpid, dst_mac, dst_port):
         """Install L2 forwarding flow entries on each switch along the shortest path
 
@@ -287,10 +358,10 @@ class ControllerApp(app_manager.OSKenApp):
             True:  Flow installation successful
             False: Path calculation failed
         """
-        path = self._dijkstra(src_dpid, dst_dpid)
+        path = self._shortest_path(src_dpid, dst_dpid)
         if path is None:
             self.logger.error('Cannot compute shortest path for %016x -> %016x, skipping flow install',
-                              src_dpid, dst_dpid)
+                               src_dpid, dst_dpid)
             return False
 
         if src_dpid == dst_dpid:
@@ -458,7 +529,7 @@ class ControllerApp(app_manager.OSKenApp):
                 data=pkt_data
             )
         else:
-            path = self._dijkstra(src_dpid, dst_dpid)
+            path = self._shortest_path(src_dpid, dst_dpid)
             if path:
                 first_hop_port = path[0][1]
                 ofctl = OfCtl.factory(cur_datapath, self.logger)
