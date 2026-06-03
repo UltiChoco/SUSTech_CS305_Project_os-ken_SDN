@@ -119,6 +119,13 @@ class Firewall:
             rule.action,
         )
 
+    def reset_switch(self, dpid):
+        """Forget cached firewall installs for a switch datapath."""
+        self.installed = {
+            key for key in self.installed
+            if key[0] != dpid
+        }
+
     def install_rules(self, ofctls):
         """
         Install firewall rules to all switches.

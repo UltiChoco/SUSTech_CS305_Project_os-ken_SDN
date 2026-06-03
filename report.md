@@ -294,6 +294,171 @@ From Figure 2, the following results can be observed:
    `DECLINE timeout released ip=192.168.1.4`,  
    indicating that the server correctly cleans expired temporary states.
 
+## Firewall Implementation
+
+### 1. Design Goal
+
+The firewall module is responsible for filtering selected network traffic inside the SDN network. Instead of installing filtering logic on each host, the controller reads firewall rules and installs high-priority OpenFlow drop rules on the switches.
+
+The firewall module has three main goals:
+
+1. parse firewall rules from a JSON configuration file;
+2. translate deny rules into OpenFlow flow entries;
+3. make sure firewall rules remain effective after switch reconnection.
+
+In our implementation, the firewall logic is mainly implemented in `firewall.py`, while `controller.py` calls the firewall module when a switch joins the controller.
+
+### 2. Firewall Rule Design
+
+Each firewall rule is represented by a `FirewallRule` object. A rule can specify source IP, destination IP, protocol, source port, destination port, and action.
+
+| Field | Meaning |
+|---|---|
+| `src_ip` | Source IP address |
+| `dst_ip` | Destination IP address |
+| `proto` | Network protocol, such as `icmp`, `tcp`, or `udp` |
+| `src_port` | Source transport-layer port |
+| `dst_port` | Destination transport-layer port |
+| `action` | Rule action. The project mainly uses `deny` |
+
+The rule file is loaded from `firewall_rules.json`. If this file does not exist, the module falls back to `firewall_rule.json`, which is the rule file used in our project. If no rule file is found, the firewall uses default deny rules.
+
+The default firewall rules block:
+
+1. ICMP traffic from `192.168.117.2` to `192.168.117.3`;
+2. TCP traffic from `192.168.117.2` to `192.168.117.3` with destination port `80`.
+
+For wildcard fields, the firewall treats `None`, empty string, `*`, and `any` as match-any values. Protocol names are normalized into OpenFlow protocol numbers:
+
+| Protocol | OpenFlow value |
+|---|---|
+| `icmp` | `1` |
+| `tcp` | `6` |
+| `udp` | `17` |
+
+### 3. OpenFlow Rule Installation
+
+When a switch joins the controller, `controller.py` creates an `OfCtl` object for the switch and calls:
+
+```python
+self.firewall.reset_switch(dpid)
+self.firewall.install_rules({dpid: ofctl})
+```
+
+For each valid `deny` rule, the firewall installs a high-priority OpenFlow flow entry:
+
+```text
+priority = 60000
+dl_type  = IPv4
+nw_src   = rule source IP
+nw_dst   = rule destination IP
+nw_proto = ICMP / TCP / UDP
+tp_src   = source port if specified
+tp_dst   = destination port if specified
+actions  = []
+```
+
+An empty action list means that the switch drops matched packets directly. This priority is higher than the normal forwarding priority (`1000`), so firewall rules are checked before shortest-path forwarding rules.
+
+The firewall also keeps an `installed` set to avoid repeatedly installing the same rule on the same switch. However, a switch restart clears the switch flow table. To handle this case, `reset_switch(dpid)` removes cached installation records for that switch before reinstalling the rules. This ensures that after `switch stop/start`, the firewall drop flows are installed again.
+
+### 4. Basic Firewall Test
+
+The basic firewall test is implemented in `tests/firewall_test/test_network.py`. It builds a simple topology with three hosts and one switch:
+
+```text
+h1 ---\
+h2 ---- s1
+h3 ---/
+```
+
+The hosts use manually configured IP addresses:
+
+| Host | IP address |
+|---|---|
+| `h1` | `192.168.117.2` |
+| `h2` | `192.168.117.3` |
+| `h3` | `192.168.117.4` |
+
+The test starts HTTP servers on `h2` at port `80` and port `8080`, then checks four cases:
+
+| Test case | Expected result | Reason |
+|---|---|---|
+| `h1 -> h2` ICMP | Fail | Blocked by the ICMP deny rule |
+| `h1 -> h3` ICMP | Pass | No rule blocks this traffic |
+| `h1 -> h2` TCP/80 | Fail | Blocked by the TCP port 80 deny rule |
+| `h1 -> h2` TCP/8080 | Pass | Port 8080 is not blocked |
+
+This test verifies that the firewall can distinguish traffic by IP address, protocol, and transport-layer port.
+
+### 5. Complex Firewall Test
+
+To satisfy the demo requirement for a larger topology, we also designed `tests/firewall_test/test_complex_firewall.py`. This test uses seven hosts and seven switches:
+
+```text
+h1-s1  h2-s2  h3-s3  h4-s4  h5-s5  h6-s6  h7-s7
+
+s4--s2--s1--s3--s6
+    |       |
+    s5      s7
+```
+
+The graph contains 14 nodes and 13 edges in total, including host-switch links and switch-switch links. The script prints the expected shortest paths between switch pairs and host pairs, so the printed paths can be compared with the controller output.
+
+The complex test performs the following checks:
+
+1. Start the complex topology and wait until all switches are connected to the controller.
+2. Send gratuitous ARP packets from all hosts so the controller learns host locations.
+3. Verify that `h1 -> h7` is reachable before adding a runtime firewall rule.
+4. Verify that the default firewall rule blocks `h1 -> h2` ICMP.
+5. Install a temporary ICMP drop flow from `h1` to `h7` on all switches.
+6. Verify that `h1 -> h7`, which was previously reachable, becomes unreachable.
+7. Remove the temporary drop flow and verify that `h1 -> h7` becomes reachable again.
+8. Restart `s5` and verify that default firewall flows are reinstalled on the restarted switch.
+9. Verify that the default firewall still blocks `h1 -> h2` and unrelated traffic `h1 -> h7` still works.
+
+The test also prints Mininet CLI commands for dynamic topology operations:
+
+```text
+switch s7 stop
+switch s7 start
+link s2 s5 down
+link s2 s5 up
+sh ovs-ofctl -O OpenFlow10 mod-port s3 4 down
+sh ovs-ofctl -O OpenFlow10 mod-port s3 4 up
+```
+
+These commands cover switch add/delete, link add/delete, host add during initialization, and port modify events.
+
+### 6. Test Result and Analysis
+
+We ran the complex firewall test in the Mininet VM using the `cs305` Python environment:
+
+```bash
+/home/mininet/software/miniconda3/envs/cs305/bin/osken-manager --observe-links controller.py
+sudo env "PATH=$PATH" /home/mininet/software/miniconda3/envs/cs305/bin/python tests/firewall_test/test_complex_firewall.py
+```
+
+The final run completed with return code `0`. The important output is summarized below:
+
+```text
+[PASS] baseline h1 -> h7 before runtime firewall rule expected reachable
+[PASS] default firewall h1 -> h2 ICMP deny rule expected blocked
+[PASS] runtime firewall makes prior h1 -> h7 path unreachable expected blocked
+[PASS] h1 -> h7 after clearing runtime firewall rule expected reachable
+[PASS] default firewall still blocks h1 -> h2 after s5 restart expected blocked
+[PASS] unrelated h1 -> h7 traffic still works after s5 restart expected reachable
+```
+
+After restarting `s5`, the flow table still contains the default firewall rules:
+
+```text
+priority=60000,icmp,nw_src=192.168.117.2,nw_dst=192.168.117.3 actions=drop
+priority=60000,tcp,nw_src=192.168.117.2,nw_dst=192.168.117.3,tp_dst=80 actions=drop
+```
+
+This result shows that the firewall rules are correctly installed, correctly enforced, and correctly reinstalled after switch reconnection. The runtime drop rule test also demonstrates the required scenario where two hosts that were previously reachable become unreachable after adding firewall rules.
+
 ## DNS Implementation
 
 Only support UDP/53 A record queries, and answers are generated from a static table in `dns_server.py`. Unknown names return NXDOMAIN (or a formatted failure response). No recursion, no external DNS, and no TCP DNS are supported.

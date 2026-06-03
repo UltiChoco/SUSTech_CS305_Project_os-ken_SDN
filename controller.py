@@ -86,6 +86,7 @@ class ControllerApp(app_manager.OSKenApp):
 
         ofctl = OfCtl.factory(dp, self.logger)
         ofctl.set_packetin_flow(cookie=0, priority=0)
+        self.firewall.reset_switch(dpid)
         self.firewall.install_rules({dpid: ofctl})
 
         self.logger.info('Switch joined: dpid=%016x', dpid)

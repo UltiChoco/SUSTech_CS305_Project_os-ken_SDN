@@ -78,6 +78,29 @@ class FirewallTest(unittest.TestCase):
         finally:
             os.remove(path)
 
+    def test_reset_switch_allows_rules_to_be_reinstalled_after_reconnect(self):
+        path = self.write_rules([
+            {
+                "src_ip": "192.168.117.2",
+                "dst_ip": "192.168.117.3",
+                "proto": "icmp",
+                "action": "deny",
+            },
+        ])
+        try:
+            firewall = Firewall(path)
+            first_ofctl = FakeOfCtl()
+            second_ofctl = FakeOfCtl()
+
+            firewall.install_rules({1: first_ofctl})
+            firewall.reset_switch(1)
+            firewall.install_rules({1: second_ofctl})
+
+            self.assertEqual(1, len(first_ofctl.flows))
+            self.assertEqual(1, len(second_ofctl.flows))
+        finally:
+            os.remove(path)
+
 
 if __name__ == "__main__":
     unittest.main()
