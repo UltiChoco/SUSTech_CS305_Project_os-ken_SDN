@@ -162,6 +162,15 @@ class ControllerApp(app_manager.OSKenApp):
         if dst_dpid not in self.graph:
             self.graph[dst_dpid] = {}
 
+        if dst_dpid in self.graph[src_dpid]:
+            self.logger.info('Link already known: %016x:%s -> %016x, skipping',
+                             src_dpid, self.graph[src_dpid][dst_dpid], dst_dpid)
+            return
+        if src_dpid in self.graph[dst_dpid]:
+            self.logger.info('Link already known (reverse): %016x:%s -> %016x, skipping',
+                             dst_dpid, self.graph[dst_dpid][src_dpid], src_dpid)
+            return
+
         self.graph[src_dpid][dst_dpid] = src_port
         self.graph[dst_dpid][src_dpid] = dst_port
 
@@ -437,12 +446,13 @@ class ControllerApp(app_manager.OSKenApp):
         dpid = datapath.id
 
         self.ip_to_mac[src_ip] = src_mac
-        self.mac_to_loc[src_mac] = (dpid, in_port)
+        if src_mac not in self.mac_to_loc:
+            self.mac_to_loc[src_mac] = (dpid, in_port)
 
         if arp_pkt.opcode == arp.ARP_REQUEST:
             self.logger.info('Received ARP request: who-has %s tell %s', dst_ip, src_ip)
 
-            if NATServer.is_external(dst_ip):
+            if NATServer.is_internal(src_ip) and NATServer.is_external(dst_ip):
                 self.logger.info('NAT Proxy ARP: %s is-at %s (to %s)',
                                  dst_ip, NATConfig.server_mac, src_ip)
                 ofctl = OfCtl.factory(datapath, self.logger)
@@ -604,7 +614,8 @@ class ControllerApp(app_manager.OSKenApp):
                 src_mac = pkt_eth.src
                 src_ip = pkt_ip.src
 
-                self.mac_to_loc[src_mac] = (datapath.id, in_port)
+                if src_mac not in self.mac_to_loc:
+                    self.mac_to_loc[src_mac] = (datapath.id, in_port)
                 self.ip_to_mac[src_ip] = src_mac
 
                 dest_info = self.mac_to_loc.get(dst_mac)
