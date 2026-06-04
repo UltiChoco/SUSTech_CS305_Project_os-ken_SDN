@@ -7,29 +7,63 @@ In this project, we developed a Software-Defined Networking (SDN) based network 
 
 Also, we implemented some bonus features, such as:
 1. **DHCP Lease Duration & RFC-Inspired Behaviors**: NAK, RELEASE, DECLINE handling, and lease expiration/reclamation.
-2. **DNS UDP/53 A Record Resolution**: Static name resolution with NXDOMAIN for unknown names.
+2. **DNS UDP/53 Record Resolution**: A, AAAA, CNAME RR are implemented for static name resolution with NXDOMAIN for unknown names.
 3. **NAT Gateway**: ICMP SNAT/DNAT with NAT table management and proxy ARP for external hosts.
 4. **Mininet Network Experiments**: TCP congestion control algorithm comparison (Reno vs Cubic) and bufferbloat phenomenon verification.
 
 ## System Architecture
+
+The project is built around one os-ken controller application. Mininet creates hosts, Open vSwitch switches, and links, while the controller observes topology events, handles Packet-In messages, and installs OpenFlow rules.
+
+```text
+Mininet hosts
+    |
+    | Ethernet / ARP / IPv4 / UDP / ICMP / DHCP / DNS packets
+    v
+Open vSwitch datapaths
+    |
+    | OpenFlow 1.0 Packet-In, FlowMod, PacketOut, topology events
+    v
+controller.py
+    |
+    +-- Topology manager: switch/link/host learning, port events
+    +-- Shortest-path switching: Dijkstra by default, Bellman-Ford variant
+    +-- ARP proxy: host learning and local ARP replies
+    +-- DHCPServer: address allocation and lease management
+    +-- DNSServer: UDP/53 static A/AAAA/CNAME responses
+    +-- Firewall: high-priority deny flow installation
+    +-- NATServer: ICMP SNAT/DNAT bonus support
+    |
+    v
+OpenFlow rules and PacketOut responses sent back to switches
 ```
-├── controller.py  # The main file of the controller
-├── dhcp.py   # Implement DHCP server here
-├── firewall.py # Implement firewall here
-├── ofctl_utilis.py # Don't need to modify this file, it provides useful functions for building and sending packets
-├── requirements.txt 
-└── tests
-    ├── dhcp_test
-    │   ├── test_network.py
-    |   └── test_network_bonus.py   
-    └── switching_test
-        ├── test_network.py
-        ├── test_bellman_ford.py
-        └── test_complex_shortest_path.py
-    └── firewall_test
-        ├── test_network.py
-        └── test_complex_firewall.py
+
+
+The main source files are organized as follows:
+
+```text
+.
+|-- controller.py              Main os-ken controller and Packet-In dispatcher
+|-- controller_bf.py           Bellman-Ford controller entry point
+|-- dhcp.py                    DHCP server, lease state, OFFER/ACK/NAK/RELEASE/DECLINE
+|-- dns_server.py              UDP/53 static DNS responder for A/AAAA/CNAME records
+|-- firewall.py                Firewall rule parser and deny-flow installer
+|-- firewall_rule.json         Default firewall policy used in tests
+|-- nat.py                     ICMP NAT bonus module
+|-- ofctl_utilis.py            OpenFlow helper wrappers for FlowMod and PacketOut
+|-- tests/
+|   |-- dhcp_test/             DHCP basic and bonus integration tests
+|   |-- switching_test/        Shortest-path, complex topology, Bellman-Ford tests
+|   |-- firewall_test/         Basic and complex firewall tests
+|   |-- nat_test/              NAT manual and automated tests
+|   |-- *_unit_test.py         Unit tests for firewall and routing algorithms
+|-- experiments/               TCP congestion control and bufferbloat experiments
+|-- docs/                      MkDocs documentation
+|-- img/                       Screenshots and report figures
+|-- requirements.txt           Python dependencies for the Mininet VM
+|-- pyproject.toml             Project metadata
 ```
+
 ## DHCP Implementation
 
 ### 1. Design Goal
@@ -631,7 +665,128 @@ This result shows that the firewall rules are correctly installed, correctly enf
 
 ## DNS Implementation
 
-Only support UDP/53 A record queries, and answers are generated from a static table in `dns_server.py`. Unknown names return NXDOMAIN (or a formatted failure response). No recursion, no external DNS, and no TCP DNS are supported.
+The DNS bonus function is implemented as a lightweight DNS responder inside the controller. It is not a recursive resolver. Instead, it answers local DNS queries from static tables defined in `dns_server.py`.
+
+### 1. Design Goal
+
+The DNS module has three goals:
+
+1. allow hosts in the Mininet network to query a controller-owned DNS server IP;
+2. provide static local name resolution for demo domains;
+3. keep DNS handling independent from normal shortest-path forwarding.
+
+In our implementation, the DNS server address is:
+
+| Item | Value |
+|---|---|
+| DNS server IP | `192.168.1.1` |
+| DNS server MAC | `7e:49:b3:f0:f9:99` |
+| Transport protocol | UDP |
+| DNS port | `53` |
+| Default TTL | `60 s` |
+
+The controller preloads the ARP mapping:
+
+```python
+self.ip_to_mac["192.168.1.1"] = "7e:49:b3:f0:f9:99"
+```
+
+Therefore, when a host sends an ARP request for `192.168.1.1`, the controller can reply with the virtual DNS server MAC address.
+
+### 2. Supported Record Types
+
+The DNS records are stored in three static tables in `dns_server.py`.
+
+| Record type | Table | Supported examples |
+|---|---|---|
+| A | `DNS_TABLE` | `h1.local`, `h2.local`, `web.local` |
+| AAAA | `DNS_AAAA_TABLE` | `h1.local`, `h2.local`, `web.local` |
+| CNAME | `DNS_CNAME_TABLE` | `www.local -> web.local` |
+
+The current records include:
+
+```text
+h1.local  A     192.168.1.2
+h2.local  A     192.168.1.3
+web.local A     192.168.1.3
+
+h1.local  AAAA  fd00::2
+h2.local  AAAA  fd00::3
+web.local AAAA  fd00::3
+
+www.local CNAME web.local
+```
+
+For A and AAAA queries on a CNAME name, the response includes the CNAME answer and, if available, the target address record. For example, an A query for `www.local` returns `www.local CNAME web.local` and the A record for `web.local`.
+
+### 3. Packet Processing Flow
+
+DNS packets are intercepted in `controller.py` before normal IP forwarding:
+
+```python
+if pkt_ip and pkt_udp and pkt_udp.dst_port == 53:
+    DNSServer.handle_dns(datapath, in_port, pkt)
+    return
+```
+
+The DNS handler then performs the following steps:
+
+1. Extract Ethernet, IPv4, UDP, and DNS payload from the packet.
+2. Parse the DNS header and the first question.
+3. Accept only IN-class A, AAAA, and CNAME queries.
+4. Normalize the queried domain name to lowercase and remove the trailing dot.
+5. Look up the corresponding static record.
+6. Build a DNS response and send it back with `PacketOut` on the input port.
+
+The response packet reverses the client addressing:
+
+| Layer | Response behavior |
+|---|---|
+| Ethernet | source = DNS server MAC, destination = client MAC |
+| IPv4 | source = `192.168.1.1`, destination = client IP |
+| UDP | source port = `53`, destination port = client's source port |
+| DNS | same transaction ID as the query |
+
+### 4. Error Handling and Limitations
+
+The DNS module handles unsupported or invalid queries conservatively:
+
+| Case | Behavior |
+|---|---|
+| Unknown name | NXDOMAIN (`rcode=3`) |
+| Unsupported type/class | Not Implemented (`rcode=4`) |
+| Malformed query | Format Error (`rcode=1`) |
+| Known name but no record of requested type | successful response with zero answers |
+
+Current limitations:
+
+1. only UDP/53 is supported;
+2. TCP DNS is not supported;
+3. recursive lookup is not supported;
+4. external DNS forwarding is not supported;
+5. only the first question in a DNS packet is handled.
+
+These limitations are acceptable for the project demo because the goal is to show that the SDN controller can recognize DNS traffic and generate local DNS replies without relying on an external DNS server.
+
+### 5. Manual Test
+
+The DNS function is tested manually in the Mininet CLI after starting the controller and topology. The important commands are:
+
+```text
+h1 nslookup web.local 192.168.1.1
+h1 nslookup h2.local 192.168.1.1
+h1 nslookup unknown.local 192.168.1.1
+h1 nslookup -type=AAAA web.local 192.168.1.1
+h1 nslookup -type=CNAME www.local 192.168.1.1
+```
+
+Expected behavior:
+
+1. `web.local` resolves to `192.168.1.3`.
+2. `h2.local` resolves to `192.168.1.3`.
+3. `unknown.local` returns NXDOMAIN.
+4. `web.local` AAAA resolves to `fd00::3`.
+5. `www.local` returns a CNAME pointing to `web.local`.
 
 ## Testing
 
