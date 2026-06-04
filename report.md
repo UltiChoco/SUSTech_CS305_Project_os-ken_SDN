@@ -650,6 +650,8 @@ As a bonus module, we built controllable network environments using Mininet to s
 
 The experiment environment uses Mininet 2.3.0 + iperf + ping. Data analysis and visualization are based on Python with matplotlib and seaborn.
 
+**All experimental data presented in this section was collected from real Mininet-emulated networks, not from software simulations.** The `experiments/data/` directory contains actual iperf throughput logs, ping RTT time series, and pcap packet captures (totaling ~80 MB) directly produced by the Mininet testbed.
+
 ### Experiment 1: TCP Congestion Control (Reno vs Cubic)
 
 #### 1.1 Background
