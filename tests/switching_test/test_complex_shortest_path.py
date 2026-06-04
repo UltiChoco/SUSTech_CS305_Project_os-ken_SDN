@@ -1,28 +1,48 @@
 """Complex automated integration test for shortest-path switching.
 
-6-switch, 6-host loop-free topology with multi-hop paths (1-hop to 4-hop).
-Verifies that the controller correctly computes shortest paths via Dijkstra
-and installs forwarding flows end-to-end.
+8-switch, 8-host cyclic topology with redundant paths. The test validates
+shortest-path forwarding and dynamic recovery after link, switch, and switch
+port changes.
 
-Topology diagram:
+Switch-level topology:
 
-    h1 -- s1 ---- s2 -- h2
-           |       | \
-           |       |  \
-    h3 -- s3      s4  s5 -- h5
-           |
-           s6 -- h6
+        s4 -------- s7
+        |           |
+        s2 -- s5 -- s6 -- s8
+        |           | \   |
+        s1 -------- s3 ---
+
+Every switch has one directly attached host with the same number, e.g. h1-s1.
+The s1-s2-s4-s7-s6-s3-s1 outer ring plus inner shortcuts create multiple loops.
 
 Requires: sudo, Mininet, running controller (osken-manager controller.py)
 """
 
 import sys
 import time
+from collections import deque
 
 from mininet.log import setLogLevel, info
 from mininet.net import Mininet
 from mininet.node import RemoteController
 from mininet.topo import Topo
+
+
+HOST_COUNT = 8
+SWITCH_COUNT = 8
+
+SWITCH_LINKS = [
+    ('s1', 's2'),
+    ('s2', 's4'),
+    ('s4', 's7'),
+    ('s7', 's6'),
+    ('s6', 's3'),
+    ('s3', 's1'),
+    ('s2', 's5'),
+    ('s5', 's6'),
+    ('s3', 's8'),
+    ('s8', 's6'),
+]
 
 
 def disable_ipv6(node):
@@ -31,9 +51,97 @@ def disable_ipv6(node):
     node.cmd("sysctl -w net.ipv6.conf.lo.disable_ipv6=1")
 
 
+def switch_id(name):
+    return int(name[1:])
+
+
+def normalize_link(a, b):
+    return tuple(sorted((a, b), key=switch_id))
+
+
+def host_switch(host_name):
+    return 's%s' % host_name[1:]
+
+
+def active_links(disabled_links=None, down_switches=None):
+    disabled_links = set(disabled_links or [])
+    down_switches = set(down_switches or [])
+    links = []
+
+    for a, b in SWITCH_LINKS:
+        if a in down_switches or b in down_switches:
+            continue
+        if normalize_link(a, b) in disabled_links:
+            continue
+        links.append((a, b))
+
+    return links
+
+
+def build_switch_graph(links):
+    graph = {}
+    for i in range(1, SWITCH_COUNT + 1):
+        graph['s%s' % i] = set()
+    for a, b in links:
+        graph[a].add(b)
+        graph[b].add(a)
+    return graph
+
+
+def shortest_switch_path(src_switch, dst_switch, disabled_links=None,
+                         down_switches=None):
+    down_switches = set(down_switches or [])
+    if src_switch in down_switches or dst_switch in down_switches:
+        return None
+    if src_switch == dst_switch:
+        return [src_switch]
+
+    graph = build_switch_graph(active_links(disabled_links, down_switches))
+    queue = deque([src_switch])
+    parent = {src_switch: None}
+
+    while queue:
+        current = queue.popleft()
+        for neighbor in sorted(graph[current], key=switch_id):
+            if neighbor in parent:
+                continue
+            parent[neighbor] = current
+            if neighbor == dst_switch:
+                queue.clear()
+                break
+            queue.append(neighbor)
+
+    if dst_switch not in parent:
+        return None
+
+    path = []
+    current = dst_switch
+    while current is not None:
+        path.append(current)
+        current = parent[current]
+    path.reverse()
+    return path
+
+
+def expected_path_string(src_host, dst_host, disabled_links=None,
+                         down_switches=None):
+    switch_path = shortest_switch_path(
+        host_switch(src_host),
+        host_switch(dst_host),
+        disabled_links,
+        down_switches,
+    )
+    if switch_path is None:
+        return None, None
+
+    full_path = [src_host] + switch_path + [dst_host]
+    return ' -> '.join(full_path), len(switch_path) - 1
+
+
 def send_arp(node, count=1):
-    node.cmd('arping -c %s -A -I %s-eth0 %s' % (count, node.name, node.IP()))
-    time.sleep(0.5)
+    node.cmd('arping -c %s -w 2 -A -I %s-eth0 %s' %
+             (count, node.name, node.IP()))
+    time.sleep(0.3)
 
 
 def wait_for_switch_controllers(net, timeout=30, interval=1):
@@ -69,7 +177,13 @@ def do_arp_all(hosts):
         send_arp(host)
 
 
-def ping_until_success(hosts, src, dst, attempts=4):
+def wait_for_reconvergence(hosts, seconds=6):
+    time.sleep(seconds)
+    do_arp_all(hosts)
+    time.sleep(1)
+
+
+def ping_until_success(hosts, src, dst, attempts=5):
     last_result = ''
 
     for attempt in range(attempts):
@@ -84,123 +198,211 @@ def ping_until_success(hosts, src, dst, attempts=4):
     return False, last_result
 
 
-class MeshTopo(Topo):
-    """6-switch, 6-host loop-free topology with multi-hop paths.
+def switch_port_for_peer(net, switch_name, peer_name):
+    switch = net.get(switch_name)
 
-    Shortest path hop counts between hosts:
-      h1-h2: 1    h1-h3: 1    h1-h4: 2    h1-h5: 2    h1-h6: 2
-      h2-h3: 2    h2-h4: 1    h2-h5: 1    h2-h6: 3
-      h3-h4: 3    h3-h5: 3    h3-h6: 1
-      h4-h5: 2    h4-h6: 4
-      h5-h6: 4
-    """
+    for intf in switch.intfList():
+        link = getattr(intf, 'link', None)
+        if link is None:
+            continue
+
+        if link.intf1.node == switch:
+            other_intf = link.intf2
+        elif link.intf2.node == switch:
+            other_intf = link.intf1
+        else:
+            continue
+
+        if other_intf.node.name == peer_name:
+            return switch.ports[intf]
+
+    raise RuntimeError('Cannot find %s port connected to %s' %
+                       (switch_name, peer_name))
+
+
+class ComplexLoopTopo(Topo):
+    """8-switch, 8-host topology with an outer ring and inner shortcuts."""
 
     def __init__(self, **opts):
         Topo.__init__(self, **opts)
 
-        h1 = self.addHost('h1', ip='192.168.10.1/24')
-        h2 = self.addHost('h2', ip='192.168.10.2/24')
-        h3 = self.addHost('h3', ip='192.168.10.3/24')
-        h4 = self.addHost('h4', ip='192.168.10.4/24')
-        h5 = self.addHost('h5', ip='192.168.10.5/24')
-        h6 = self.addHost('h6', ip='192.168.10.6/24')
+        hosts = {}
+        switches = {}
 
-        s1 = self.addSwitch('s1')
-        s2 = self.addSwitch('s2')
-        s3 = self.addSwitch('s3')
-        s4 = self.addSwitch('s4')
-        s5 = self.addSwitch('s5')
-        s6 = self.addSwitch('s6')
+        for i in range(1, HOST_COUNT + 1):
+            hosts[i] = self.addHost('h%s' % i,
+                                    ip='192.168.10.%s/24' % i)
 
-        self.addLink(h1, s1)
-        self.addLink(h2, s2)
-        self.addLink(h3, s3)
-        self.addLink(h4, s4)
-        self.addLink(h5, s5)
-        self.addLink(h6, s6)
+        for i in range(1, SWITCH_COUNT + 1):
+            switches[i] = self.addSwitch('s%s' % i)
 
-        self.addLink(s1, s2)
-        self.addLink(s1, s3)
-        self.addLink(s2, s4)
-        self.addLink(s2, s5)
-        self.addLink(s3, s6)
+        for i in range(1, HOST_COUNT + 1):
+            self.addLink(hosts[i], switches[i])
+
+        for a, b in SWITCH_LINKS:
+            self.addLink(switches[switch_id(a)], switches[switch_id(b)])
+
+
+def run_ping_case(hosts, name, src_name, dst_name, disabled_links=None,
+                  down_switches=None):
+    expected_path, expected_hops = expected_path_string(
+        src_name,
+        dst_name,
+        disabled_links,
+        down_switches,
+    )
+    src = hosts[src_name]
+    dst = hosts[dst_name]
+
+    info('\n=== %s (%s -> %s) ===\n' % (name, src.IP(), dst.IP()))
+    if expected_path is None:
+        info('Expected shortest path: no available path\n')
+    else:
+        info('Expected shortest path: %s (%d switch hops)\n' %
+             (expected_path, expected_hops))
+
+    passed, result = ping_until_success(hosts, src, dst)
+    info(result)
+    if passed:
+        info('  PASS\n')
+    else:
+        info('  FAIL\n')
+    return passed
+
+
+def run_baseline_tests(hosts):
+    test_pairs = [
+        ('baseline h1->h2', 'h1', 'h2'),
+        ('baseline h1->h4', 'h1', 'h4'),
+        ('baseline h1->h7', 'h1', 'h7'),
+        ('baseline h1->h8', 'h1', 'h8'),
+        ('baseline h2->h5', 'h2', 'h5'),
+        ('baseline h2->h6', 'h2', 'h6'),
+        ('baseline h3->h8', 'h3', 'h8'),
+        ('baseline h4->h6', 'h4', 'h6'),
+        ('baseline h5->h7', 'h5', 'h7'),
+        ('baseline h6->h8', 'h6', 'h8'),
+        ('baseline h7->h3', 'h7', 'h3'),
+        ('baseline h8->h1', 'h8', 'h1'),
+    ]
+
+    results = []
+    for name, src_name, dst_name in test_pairs:
+        results.append((name, run_ping_case(hosts, name, src_name, dst_name)))
+    return results
+
+
+def run_dynamic_tests(net, hosts):
+    results = []
+
+    disabled_s2_s4 = {normalize_link('s2', 's4')}
+    info('\n=== Link modification: bring s2-s4 down ===\n')
+    net.configLinkStatus('s2', 's4', 'down')
+    wait_for_reconvergence(hosts)
+    results.append((
+        'link down s2-s4 h1->h7',
+        run_ping_case(hosts, 'link down s2-s4', 'h1', 'h7',
+                      disabled_links=disabled_s2_s4),
+    ))
+
+    info('\n=== Link modification: restore s2-s4 ===\n')
+    net.configLinkStatus('s2', 's4', 'up')
+    wait_for_reconvergence(hosts, seconds=8)
+    results.append((
+        'link restored s2-s4 h1->h7',
+        run_ping_case(hosts, 'link restored s2-s4', 'h1', 'h7'),
+    ))
+
+    info('\n=== Switch modification: stop s5 ===\n')
+    s5 = net.get('s5')
+    s5.stop(deleteIntfs=False)
+    wait_for_reconvergence(hosts, seconds=8)
+    results.append((
+        'switch s5 stopped h2->h6',
+        run_ping_case(hosts, 'switch s5 stopped', 'h2', 'h6',
+                      down_switches={'s5'}),
+    ))
+
+    info('\n=== Switch modification: restart s5 ===\n')
+    s5.start(net.controllers)
+    wait_for_switch_controllers(net)
+    wait_for_reconvergence(hosts, seconds=8)
+    results.append((
+        'switch s5 restarted h2->h6',
+        run_ping_case(hosts, 'switch s5 restarted', 'h2', 'h6'),
+    ))
+
+    info('\n=== Port modification: bring s3 port toward s1 down ===\n')
+    s3_to_s1_port = switch_port_for_peer(net, 's3', 's1')
+    net.get('s3').cmd('ovs-ofctl -O OpenFlow10 mod-port s3 %s down' %
+                      s3_to_s1_port)
+    disabled_s1_s3 = {normalize_link('s1', 's3')}
+    wait_for_reconvergence(hosts, seconds=8)
+    results.append((
+        'port down s3-s1 h1->h8',
+        run_ping_case(hosts, 'port down s3-s1', 'h1', 'h8',
+                      disabled_links=disabled_s1_s3),
+    ))
+
+    info('\n=== Port modification: restore s3 port toward s1 ===\n')
+    net.get('s3').cmd('ovs-ofctl -O OpenFlow10 mod-port s3 %s up' %
+                      s3_to_s1_port)
+    wait_for_reconvergence(hosts, seconds=8)
+    results.append((
+        'port restored s3-s1 h1->h8',
+        run_ping_case(hosts, 'port restored s3-s1', 'h1', 'h8'),
+    ))
+
+    return results
 
 
 def run_test():
-    topo = MeshTopo()
-
+    topo = ComplexLoopTopo()
     net = Mininet(
         topo=topo,
         autoSetMacs=True,
         controller=RemoteController,
     )
 
-    for h in net.hosts:
-        disable_ipv6(h)
-    for s in net.switches:
-        disable_ipv6(s)
+    results = []
 
-    net.start()
-    wait_for_switch_controllers(net)
-    time.sleep(2)
+    try:
+        for h in net.hosts:
+            disable_ipv6(h)
+        for s in net.switches:
+            disable_ipv6(s)
 
-    hosts = {name: net.get(name) for name in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']}
-    install_static_arp(hosts)
+        net.start()
+        wait_for_switch_controllers(net)
+        time.sleep(3)
 
-    info('\n=== Sending gratuitous ARP from all hosts ===\n')
-    do_arp_all(hosts)
-    time.sleep(4)
+        hosts = {
+            'h%s' % i: net.get('h%s' % i)
+            for i in range(1, HOST_COUNT + 1)
+        }
+        install_static_arp(hosts)
 
-    test_pairs = [
-        ('h1->h2', hosts['h1'], hosts['h2'], 1, 'h1 -> s1 -> s2 -> h2'),
-        ('h1->h3', hosts['h1'], hosts['h3'], 1, 'h1 -> s1 -> s3 -> h3'),
-        ('h1->h4', hosts['h1'], hosts['h4'], 2, 'h1 -> s1 -> s2 -> s4 -> h4'),
-        ('h1->h5', hosts['h1'], hosts['h5'], 2, 'h1 -> s1 -> s2 -> s5 -> h5'),
-        ('h1->h6', hosts['h1'], hosts['h6'], 2, 'h1 -> s1 -> s3 -> s6 -> h6'),
-        ('h2->h3', hosts['h2'], hosts['h3'], 2, 'h2 -> s2 -> s1 -> s3 -> h3'),
-        ('h2->h4', hosts['h2'], hosts['h4'], 1, 'h2 -> s2 -> s4 -> h4'),
-        ('h2->h5', hosts['h2'], hosts['h5'], 1, 'h2 -> s2 -> s5 -> h5'),
-        ('h2->h6', hosts['h2'], hosts['h6'], 3, 'h2 -> s2 -> s1 -> s3 -> s6 -> h6'),
-        ('h3->h4', hosts['h3'], hosts['h4'], 3, 'h3 -> s3 -> s1 -> s2 -> s4 -> h4'),
-        ('h3->h5', hosts['h3'], hosts['h5'], 3, 'h3 -> s3 -> s1 -> s2 -> s5 -> h5'),
-        ('h3->h6', hosts['h3'], hosts['h6'], 1, 'h3 -> s3 -> s6 -> h6'),
-        ('h4->h5', hosts['h4'], hosts['h5'], 2, 'h4 -> s4 -> s2 -> s5 -> h5'),
-        ('h4->h6', hosts['h4'], hosts['h6'], 4, 'h4 -> s4 -> s2 -> s1 -> s3 -> s6 -> h6'),
-        ('h5->h6', hosts['h5'], hosts['h6'], 4, 'h5 -> s5 -> s2 -> s1 -> s3 -> s6 -> h6'),
-        ('h6->h1', hosts['h6'], hosts['h1'], 2, 'h6 -> s6 -> s3 -> s1 -> h1'),
-        ('h6->h2', hosts['h6'], hosts['h2'], 3, 'h6 -> s6 -> s3 -> s1 -> s2 -> h2'),
-        ('h6->h3', hosts['h6'], hosts['h3'], 1, 'h6 -> s6 -> s3 -> h3'),
-        ('h5->h1', hosts['h5'], hosts['h1'], 2, 'h5 -> s5 -> s2 -> s1 -> h1'),
-        ('h4->h1', hosts['h4'], hosts['h1'], 2, 'h4 -> s4 -> s2 -> s1 -> h1'),
-    ]
+        info('\n=== Sending gratuitous ARP from all hosts ===\n')
+        do_arp_all(hosts)
+        time.sleep(5)
 
-    tests = []
-    for name, src, dst, expected_hops, expected_path in test_pairs:
-        info('\n=== %s (%s -> %s, expected %d hops) ===\n' %
-             (name, src.IP(), dst.IP(), expected_hops))
-        info('Expected path: %s\n' % expected_path)
-        passed, result = ping_until_success(hosts, src, dst)
-        info(result)
-        tests.append(passed)
-        if passed:
-            info('  PASS\n')
-        else:
-            info('  FAIL\n')
+        results.extend(run_baseline_tests(hosts))
+        results.extend(run_dynamic_tests(net, hosts))
+    finally:
+        net.stop()
 
-    net.stop()
-
-    passed = sum(tests)
+    passed = sum(1 for _, ok in results if ok)
     info('\n========================================\n')
-    info('=== Results: %d/%d tests passed ===\n' % (passed, len(tests)))
+    info('=== Results: %d/%d tests passed ===\n' % (passed, len(results)))
     info('========================================\n')
 
-    if passed == len(tests):
+    if passed == len(results):
         info('ALL TESTS PASSED\n')
     else:
-        failures = [test_pairs[i][0] for i, ok in enumerate(tests) if not ok]
+        failures = [name for name, ok in results if not ok]
         info('FAILED: %s\n' % ', '.join(failures))
 
-    return passed == len(tests)
+    return passed == len(results)
 
 
 if __name__ == '__main__':

@@ -39,6 +39,7 @@ class ControllerApp(app_manager.OSKenApp):
 
     FORWARDING_COOKIE = 0x1000
     FORWARDING_PRIORITY = 1000
+    FLOOD_SUPPRESS_SECONDS = 2.0
 
     ROUTING_ALGORITHM = "dijkstra"  # "dijkstra" or "bellman_ford"
 
@@ -65,6 +66,142 @@ class ControllerApp(app_manager.OSKenApp):
         self.mac_to_loc = {}
         self.ip_to_mac = {}
         self.ip_to_mac["192.168.1.1"] = "7e:49:b3:f0:f9:99"
+        self.flood_history = {}
+
+    def _normalize_mac(self, mac):
+        if mac is None:
+            return None
+        return str(mac).lower()
+
+    def _is_switch_port(self, dpid, port_no):
+        """Return True when a local port is currently used for a switch link."""
+        return port_no in self.graph.get(dpid, {}).values()
+
+    def _learn_host(self, mac, dpid, port_no, ip=None):
+        """Learn a host location without letting looped packets poison it."""
+        mac = self._normalize_mac(mac)
+        if not mac or mac == "ff:ff:ff:ff:ff:ff":
+            return
+
+        if ip and ip != "0.0.0.0":
+            self.ip_to_mac[ip] = mac
+
+        if self._is_switch_port(dpid, port_no):
+            self.logger.debug('Ignore host learn on switch-facing port: mac=%s, dpid=%016x, port=%d',
+                              mac, dpid, port_no)
+            return
+
+        old_loc = self.mac_to_loc.get(mac)
+        new_loc = (dpid, port_no)
+        if old_loc != new_loc:
+            self.mac_to_loc[mac] = new_loc
+            self._clear_forwarding_flows(mac)
+            self.logger.info('Host location learned: mac=%s, dpid=%016x, port=%d',
+                             mac, dpid, port_no)
+
+    def _remove_host_locations_on_switch(self, dpid):
+        stale_macs = [
+            mac for mac, (host_dpid, _) in self.mac_to_loc.items()
+            if host_dpid == dpid
+        ]
+        for mac in stale_macs:
+            del self.mac_to_loc[mac]
+
+        stale_ips = [
+            ip for ip, mac in self.ip_to_mac.items()
+            if mac in stale_macs
+        ]
+        for ip in stale_ips:
+            del self.ip_to_mac[ip]
+
+    def _remove_host_locations_on_port(self, dpid, port_no):
+        stale_macs = [
+            mac for mac, loc in self.mac_to_loc.items()
+            if loc == (dpid, port_no)
+        ]
+        for mac in stale_macs:
+            del self.mac_to_loc[mac]
+
+        stale_ips = [
+            ip for ip, mac in self.ip_to_mac.items()
+            if mac in stale_macs
+        ]
+        for ip in stale_ips:
+            del self.ip_to_mac[ip]
+
+    def _delete_forwarding_flow_for_mac(self, dp, mac):
+        """Delete only shortest-path L2 flows matching the destination MAC."""
+        mac = self._normalize_mac(mac)
+        if not mac:
+            return
+
+        ofp = dp.ofproto
+        ofp_parser = dp.ofproto_parser
+        wildcards = ofp.OFPFW_ALL & ~ofp.OFPFW_DL_DST
+        match = ofp_parser.OFPMatch(
+            wildcards,
+            0,      # in_port
+            0,      # dl_src
+            mac,
+            0,      # dl_vlan
+            0,      # dl_vlan_pcp
+            0,      # dl_type
+            0,      # nw_tos
+            0,      # nw_proto
+            0,      # nw_src
+            0,      # nw_dst
+            0,      # tp_src
+            0,      # tp_dst
+        )
+        cmd = getattr(ofp, "OFPFC_DELETE_STRICT", ofp.OFPFC_DELETE)
+        flow_mod = ofp_parser.OFPFlowMod(
+            dp,
+            match,
+            self.FORWARDING_COOKIE,
+            cmd,
+            priority=self.FORWARDING_PRIORITY,
+            actions=[]
+        )
+        dp.send_msg(flow_mod)
+
+    def _clear_forwarding_flows(self, mac=None):
+        """Remove cached shortest-path flows so later packets recompute paths."""
+        if mac is None:
+            macs = set(self.mac_to_loc.keys())
+            macs.update(self.ip_to_mac.values())
+        else:
+            macs = {mac}
+
+        for dp in list(self.dpid_to_dp.values()):
+            for dst_mac in macs:
+                self._delete_forwarding_flow_for_mac(dp, dst_mac)
+
+    def _remove_links_for_port(self, dpid, port_no):
+        removed = []
+        for neighbor, local_port in list(self.graph.get(dpid, {}).items()):
+            if local_port != port_no:
+                continue
+            removed.append((dpid, neighbor))
+            del self.graph[dpid][neighbor]
+            if neighbor in self.graph and dpid in self.graph[neighbor]:
+                del self.graph[neighbor][dpid]
+        return removed
+
+    def _should_flood(self, key):
+        now = time.time()
+        expired = [
+            item for item, last_seen in self.flood_history.items()
+            if now - last_seen >= self.FLOOD_SUPPRESS_SECONDS
+        ]
+        for item in expired:
+            del self.flood_history[item]
+
+        last_seen = self.flood_history.get(key)
+        if last_seen is not None and now - last_seen < self.FLOOD_SUPPRESS_SECONDS:
+            return False
+
+        self.flood_history[key] = now
+        return True
 
     @set_ev_cls(event.EventSwitchEnter)
     def _handle_switch_add(self, ev):
@@ -83,6 +220,7 @@ class ControllerApp(app_manager.OSKenApp):
 
         if dpid not in self.graph:
             self.graph[dpid] = {}
+        self._clear_forwarding_flows()
 
         ofctl = OfCtl.factory(dp, self.logger)
         ofctl.set_packetin_flow(cookie=0, priority=0)
@@ -113,6 +251,9 @@ class ControllerApp(app_manager.OSKenApp):
         if dpid in self.dpid_to_dp:
             del self.dpid_to_dp[dpid]
 
+        self._remove_host_locations_on_switch(dpid)
+        self._clear_forwarding_flows()
+
         self.logger.info('Switch left: dpid=%016x', dpid)
 
     @set_ev_cls(event.EventHostAdd)
@@ -132,7 +273,7 @@ class ControllerApp(app_manager.OSKenApp):
         dpid = host.port.dpid
         port = host.port.port_no
 
-        self.mac_to_loc[mac] = (dpid, port)
+        self._learn_host(mac, dpid, port)
 
         for ip in host.ipv4:
             self.ip_to_mac[ip] = mac
@@ -163,17 +304,22 @@ class ControllerApp(app_manager.OSKenApp):
         if dst_dpid not in self.graph:
             self.graph[dst_dpid] = {}
 
-        if dst_dpid in self.graph[src_dpid]:
-            self.logger.info('Link already known: %016x:%s -> %016x, skipping',
-                             src_dpid, self.graph[src_dpid][dst_dpid], dst_dpid)
-            return
-        if src_dpid in self.graph[dst_dpid]:
-            self.logger.info('Link already known (reverse): %016x:%s -> %016x, skipping',
-                             dst_dpid, self.graph[dst_dpid][src_dpid], src_dpid)
-            return
+        old_src_port = self.graph[src_dpid].get(dst_dpid)
+        old_dst_port = self.graph[dst_dpid].get(src_dpid)
 
         self.graph[src_dpid][dst_dpid] = src_port
         self.graph[dst_dpid][src_dpid] = dst_port
+
+        if old_src_port == src_port and old_dst_port == dst_port:
+            self.logger.info('Link already known: %016x:%d <-> %016x:%d',
+                             src_dpid, src_port, dst_dpid, dst_port)
+            return
+
+        if old_src_port is not None or old_dst_port is not None:
+            self._clear_forwarding_flows()
+            self.logger.info('Link updated: %016x:%d <-> %016x:%d',
+                             src_dpid, src_port, dst_dpid, dst_port)
+            return
 
         self.logger.info('Link added: %016x:%d <-> %016x:%d',
                          src_dpid, src_port, dst_dpid, dst_port)
@@ -194,6 +340,7 @@ class ControllerApp(app_manager.OSKenApp):
         if dst_dpid in self.graph and src_dpid in self.graph[dst_dpid]:
             del self.graph[dst_dpid][src_dpid]
 
+        self._clear_forwarding_flows()
         self.logger.info('Link deleted: %016x <-> %016x', src_dpid, dst_dpid)
 
     @set_ev_cls(event.EventPortModify)
@@ -203,13 +350,21 @@ class ControllerApp(app_manager.OSKenApp):
         Triggered when a switch port status (UP / DOWN) changes.
         Includes ports connected to hosts and ports interconnecting switches.
 
-        Current implementation: Log only. Can be extended to respond to port DOWN
-        events (e.g., clearing location info for affected hosts).
+        Remove affected topology edges and cached flows. If the port comes back
+        up, the topology discovery module will emit EventLinkAdd and the graph
+        will be rebuilt from fresh LLDP observations.
         """
         port = ev.port
         dpid = port.dpid
         port_no = port.port_no
-        self.logger.info('Port status changed: dpid=%016x, port=%d', dpid, port_no)
+        removed_links = self._remove_links_for_port(dpid, port_no)
+        self._remove_host_locations_on_port(dpid, port_no)
+        if removed_links:
+            self._clear_forwarding_flows()
+            self.logger.info('Port status changed: dpid=%016x, port=%d, removed_links=%s',
+                             dpid, port_no, removed_links)
+        else:
+            self.logger.info('Port status changed: dpid=%016x, port=%d', dpid, port_no)
 
     def _dijkstra(self, src_dpid, dst_dpid):
         """Dijkstra Shortest Path Algorithm
@@ -446,9 +601,7 @@ class ControllerApp(app_manager.OSKenApp):
         dst_ip = arp_pkt.dst_ip
         dpid = datapath.id
 
-        self.ip_to_mac[src_ip] = src_mac
-        if src_mac not in self.mac_to_loc:
-            self.mac_to_loc[src_mac] = (dpid, in_port)
+        self._learn_host(src_mac, dpid, in_port, src_ip)
 
         if arp_pkt.opcode == arp.ARP_REQUEST:
             self.logger.info('Received ARP request: who-has %s tell %s', dst_ip, src_ip)
@@ -488,6 +641,11 @@ class ControllerApp(app_manager.OSKenApp):
                 )
             else:
                 self.logger.info('Flooding ARP request: target %s unknown', dst_ip)
+                flood_key = ('arp-request', src_mac, src_ip, dst_ip)
+                if not self._should_flood(flood_key):
+                    self.logger.info('Suppress repeated ARP request flood: %s -> %s',
+                                     src_ip, dst_ip)
+                    return
                 ofctl = OfCtl.factory(datapath, self.logger)
                 ofctl.send_packet_out(
                     in_port=in_port,
@@ -506,6 +664,11 @@ class ControllerApp(app_manager.OSKenApp):
             dest_info = self.mac_to_loc.get(target_mac)
             if dest_info is None:
                 self.logger.info('Unknown target host location, flooding ARP reply')
+                flood_key = ('arp-reply', src_mac, target_mac, src_ip, target_ip)
+                if not self._should_flood(flood_key):
+                    self.logger.info('Suppress repeated ARP reply flood: %s -> %s',
+                                     src_ip, target_ip)
+                    return
                 ofctl = OfCtl.factory(datapath, self.logger)
                 ofctl.send_packet_out(
                     in_port=in_port,
@@ -589,6 +752,10 @@ class ControllerApp(app_manager.OSKenApp):
             pkt = packet.Packet(data=msg.data)
             in_port = msg.in_port
 
+            pkt_eth = pkt.get_protocol(ethernet.ethernet)
+            if pkt_eth and pkt_eth.ethertype == ether_types.ETH_TYPE_LLDP:
+                return
+
             pkt_dhcp = pkt.get_protocols(dhcp.dhcp)
             if pkt_dhcp:
                 DHCPServer.handle_dhcp(datapath, in_port, pkt)
@@ -605,7 +772,6 @@ class ControllerApp(app_manager.OSKenApp):
                 DNSServer.handle_dns(datapath, in_port, pkt)
                 return
 
-            pkt_eth = pkt.get_protocol(ethernet.ethernet)
             if pkt_ip and pkt_eth:
                 if NATServer.handle_nat(datapath, in_port, pkt, self):
                     return
@@ -615,9 +781,7 @@ class ControllerApp(app_manager.OSKenApp):
                 src_mac = pkt_eth.src
                 src_ip = pkt_ip.src
 
-                if src_mac not in self.mac_to_loc:
-                    self.mac_to_loc[src_mac] = (datapath.id, in_port)
-                self.ip_to_mac[src_ip] = src_mac
+                self._learn_host(src_mac, datapath.id, in_port, src_ip)
 
                 dest_info = self.mac_to_loc.get(dst_mac)
                 if dest_info:
@@ -630,6 +794,11 @@ class ControllerApp(app_manager.OSKenApp):
                                      src_ip, src_mac, dst_ip, dst_mac)
                 else:
                     self.logger.info('Unknown destination MAC %s, flooding IP packet', dst_mac)
+                    flood_key = ('ip-unknown-dst', src_mac, dst_mac, src_ip, dst_ip, pkt_ip.proto)
+                    if not self._should_flood(flood_key):
+                        self.logger.info('Suppress repeated IP flood: %s -> %s',
+                                         src_ip, dst_ip)
+                        return
                     ofctl = OfCtl.factory(datapath, self.logger)
                     ofctl.send_packet_out(
                         in_port=in_port,
@@ -638,12 +807,16 @@ class ControllerApp(app_manager.OSKenApp):
                     )
                 return
 
-            ofctl = OfCtl.factory(datapath, self.logger)
-            ofctl.send_packet_out(
-                in_port=in_port,
-                output=datapath.ofproto.OFPP_FLOOD,
-                data=msg.data
-            )
+            if pkt_eth:
+                flood_key = ('unknown-eth', pkt_eth.ethertype, pkt_eth.src, pkt_eth.dst)
+                if not self._should_flood(flood_key):
+                    return
+                ofctl = OfCtl.factory(datapath, self.logger)
+                ofctl.send_packet_out(
+                    in_port=in_port,
+                    output=datapath.ofproto.OFPP_FLOOD,
+                    data=msg.data
+                )
 
         except Exception as e:
             self.logger.error('packet_in handler exception: %s', e)
