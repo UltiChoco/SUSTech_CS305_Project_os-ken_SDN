@@ -4,16 +4,28 @@
 shortest-path forwarding and dynamic recovery after link, switch, and switch
 port changes.
 
-Switch-level topology:
+Host-to-switch links (8 edges):
+  h1-s1  h2-s2  h3-s3  h4-s4  h5-s5  h6-s6  h7-s7  h8-s8
 
+Switch-level topology (10 inter-switch edges):
+
+        h4        h7
+         |         |
         s4 -------- s7
-        |           |
+         |         |
         s2 -- s5 -- s6 -- s8
-        |           | \   |
-        s1 -------- s3 ---
+         |    |    / \    |
+        h2  h5  h6      h8
+         |         \   /
+        s1 -------- s3
+         |           |
+        h1          h3
+
+  Outer ring: s1-s2-s4-s7-s6-s3-s1
+  Inner chords: s2-s5, s5-s6, s3-s8, s8-s6
 
 Every switch has one directly attached host with the same number, e.g. h1-s1.
-The s1-s2-s4-s7-s6-s3-s1 outer ring plus inner shortcuts create multiple loops.
+The outer ring plus inner chords create multiple loops.
 
 Requires: sudo, Mininet, running controller (osken-manager controller.py)
 """
@@ -198,6 +210,63 @@ def ping_until_success(hosts, src, dst, attempts=5):
     return False, last_result
 
 
+def print_expected_topology():
+    info("""
+=== Complex shortest-path topology reference ===
+
+Host links:
+  h1-s1  h2-s2  h3-s3  h4-s4  h5-s5  h6-s6  h7-s7  h8-s8
+
+Switch links:
+  s1-s2  s2-s4  s4-s7  s7-s6  s6-s3  s3-s1
+  s2-s5  s5-s6  s3-s8  s8-s6
+
+Mermaid:
+  graph LR
+    h1---s1
+    h2---s2
+    h3---s3
+    h4---s4
+    h5---s5
+    h6---s6
+    h7---s7
+    h8---s8
+    s1---s2
+    s2---s4
+    s4---s7
+    s7---s6
+    s6---s3
+    s3---s1
+    s2---s5
+    s5---s6
+    s3---s8
+    s8---s6
+
+Expected host shortest paths used by this test:
+""")
+
+    baseline_pairs = [
+        ('h1', 'h2'), ('h1', 'h4'), ('h1', 'h7'), ('h1', 'h8'),
+        ('h2', 'h5'), ('h2', 'h6'), ('h3', 'h8'), ('h4', 'h6'),
+        ('h5', 'h7'), ('h6', 'h8'), ('h7', 'h3'), ('h8', 'h1'),
+    ]
+    for src, dst in baseline_pairs:
+        path, hops = expected_path_string(src, dst)
+        info('  %s -> %s: %s (%d switch hops)\n' % (src, dst, path, hops))
+
+    info("""Dynamic CLI checks (controller should be running):
+  net
+  pingall
+  link s2 s4 down
+  link s2 s4 up
+  switch s5 stop
+  switch s5 start
+  sh ovs-ofctl -O OpenFlow10 mod-port s3 <port-to-s1> down
+  sh ovs-ofctl -O OpenFlow10 mod-port s3 <port-to-s1> up
+========================================
+""")
+
+
 def switch_port_for_peer(net, switch_name, peer_name):
     switch = net.get(switch_name)
 
@@ -357,6 +426,7 @@ def run_dynamic_tests(net, hosts):
 
 
 def run_test():
+    print_expected_topology()
     topo = ComplexLoopTopo()
     net = Mininet(
         topo=topo,
