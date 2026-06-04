@@ -412,7 +412,7 @@ The topology contains **8 hosts**, **8 switches**, **8 host–switch edges**, an
 Hosts use addresses `192.168.10.1` – `192.168.10.8/24`. The topology figure is stored at `img/complex_shortest_path_topology.svg` (source: `tests/switching_test/complex_shortest_path_topology.svg`).
 
 <p align="center">
-  <img src="./img/complex_shortest_path_topology.svg" width="92%"/>
+  <img src="./img/complex_shortest_path_topology.png" width="92%"/>
 </p>
 
 <p align="center">
