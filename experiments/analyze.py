@@ -212,12 +212,12 @@ def chart_tcp_throughput():
     ax.plot(x2, cubic_data, 's-', color='#b2182b', markersize=5, linewidth=1.4,
             markeredgewidth=0.5, markeredgecolor='white', label='TCP Cubic', alpha=0.85)
 
-    reno_avg = np.mean(reno_data)
-    cubic_avg = np.mean(cubic_data)
+    reno_avg = np.mean(reno_data[1:]) if len(reno_data) > 1 else np.mean(reno_data)
+    cubic_avg = np.mean(cubic_data[1:]) if len(cubic_data) > 1 else np.mean(cubic_data)
     ax.axhline(y=reno_avg, color='#2166ac', linestyle='--', linewidth=1.0, alpha=0.7,
-               label='Reno avg: %.2f Mbps' % reno_avg)
+               label='Reno avg: %.2f Mbps (excl. 1st s)' % reno_avg)
     ax.axhline(y=cubic_avg, color='#b2182b', linestyle='--', linewidth=1.0, alpha=0.7,
-               label='Cubic avg: %.2f Mbps' % cubic_avg)
+               label='Cubic avg: %.2f Mbps (excl. 1st s)' % cubic_avg)
 
     ax.axhline(y=BOTTLENECK_Mbps, color='#4d4d4d', linestyle=':', linewidth=1.2, alpha=0.5,
                label='Bottleneck: %d Mbps' % BOTTLENECK_Mbps)
