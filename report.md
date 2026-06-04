@@ -707,13 +707,12 @@ The NAT processing is integrated at two points in the controller:
 
 When an internal host sends an ARP request for an external IP (i.e., destination is outside `192.168.1.0/24`), the controller responds with the NAT gateway MAC address (`7e:49:b3:f0:f9:99`):
 
-```text
-Internal Host                    Controller
-    |  ARP request: who-has 10.0.0.2?   |
-    |  ---------------------------------> |
-    |                                     |
-    |  ARP reply: 10.0.0.2 is-at NAT-MAC |
-    |  <--------------------------------- |
+```mermaid
+sequenceDiagram
+    participant H as Internal Host
+    participant C as Controller
+    H->>C: ARP request: who-has 10.0.0.2?
+    C->>H: ARP reply: 10.0.0.2 is-at NAT-MAC
 ```
 
 This is implemented in `controller.py` `_handle_arp()`, which checks `NATServer.is_internal(src_ip)` and `NATServer.is_external(dst_ip)` before normal ARP proxy logic.
@@ -809,6 +808,17 @@ The current NAT implementation focuses on ICMP as a proof of concept, with the f
 - **TCP/UDP extension**: The `_tcp_map` and `_udp_map` tables are prepared with port-based translation keys, following the standard NAPT (Network Address Port Translation) pattern. Extending to TCP/UDP would require rewriting transport-layer checksums in addition to IP header modification.
 - **NAT entry cleanup**: Expired entries are cleaned lazily before each lookup, avoiding the need for periodic timer threads.
 
+#### 6.1 Control-Plane Prototype vs. Data-Plane Offloading
+
+The current implementation is a **control-plane based prototype**: every NAT translation is performed by the controller in `packet_in_handler()` via `PacketOut` messages. Each translated packet incurs a round-trip through the controller (Packet-In → translate → Packet-Out), which is sufficient for demonstrating the NAT concept in a small-scale environment.
+
+However, this approach does not scale to production deployments for two reasons:
+
+1. **Controller bottleneck**: Every translated packet must pass through the controller, consuming CPU and limiting aggregate throughput to the controller's processing capacity.
+2. **Latency overhead**: The Packet-In/Packet-Out round-trip adds per-packet latency proportional to the controller-switch RTT.
+
+In a production SDN deployment, NAT translation rules should be **offloaded to the data plane** by installing OpenFlow flow entries that perform IP/MAC rewriting directly in the switch hardware (e.g., `OFPAT_SET_NW_SRC`, `OFPAT_SET_NW_DST`, `OFPAT_SET_DL_SRC`, `OFPAT_SET_DL_DST` actions). The controller would install these rules reactively upon the first packet of a new NAT session, and subsequent packets would be forwarded at line rate without controller involvement. This follows the standard SDN pattern of "heavy-hitter" flows being handled in hardware while the controller retains visibility for flow setup and policy decisions.
+
 ## Mininet Network Experiments
 
 As a bonus module, we built controllable network environments using Mininet to study two core networking phenomena:
@@ -850,15 +860,15 @@ h1 (sender) --- s1 ========== s2 --- h2 (receiver)
 
 #### 1.4 Throughput Results
 
+> Note: The first-second iperf sample is excluded from statistics below to eliminate the initial slow-start burst transient, which inflates the mean and is not representative of steady-state behavior.
+
 | Metric | TCP Reno | TCP Cubic |
 |---|---|---|
-| Average throughput | **10.81 Mbps** | **9.85 Mbps** |
-| Maximum throughput | 49.30 Mbps | 16.80 Mbps |
+| Average throughput | **9.49 Mbps** | **9.61 Mbps** |
+| Maximum throughput | 14.60 Mbps | 13.40 Mbps |
 | Minimum throughput | 4.69 Mbps | 7.81 Mbps |
-| Standard deviation | 7.31 Mbps | 1.56 Mbps |
-| Bottleneck utilization | ~108% * | ~99% |
-
-> \* Reno's average exceeds 10 Mbps because the first-second throughput surges to 49.30 Mbps during slow-start (burst), inflating the overall mean. Excluding the first second, Reno stabilizes at an average of 9.49 Mbps (~95% utilization) with a standard deviation of 1.55 Mbps.
+| Standard deviation | 1.55 Mbps | 0.90 Mbps |
+| Bottleneck utilization | ~95% | ~96% |
 
 <p align="center">
   <img src="./experiments/charts/tcp_throughput_comparison.png" width="90%"/>
@@ -882,8 +892,8 @@ Reno exhibits the classic **AIMD sawtooth pattern**: cwnd grows linearly until i
 
 #### 1.6 Conclusion
 
-- Under a single-flow, 10 Mbps / 20 ms bottleneck, both Reno (10.81 Mbps) and Cubic (9.85 Mbps) achieve comparable throughput. Reno's initial burst (49.30 Mbps) inflates its average; excluding the first second it stabilizes around 9.49 Mbps.
-- Cubic delivers more stable throughput (std 1.56 vs. 7.31), with smaller fluctuations.
+- Under a single-flow, 10 Mbps / 20 ms bottleneck, both Reno (9.49 Mbps) and Cubic (9.61 Mbps) achieve comparable throughput, with both nearly saturating the bottleneck.
+- Cubic delivers more stable throughput (std 0.90 vs. 1.55), with smaller fluctuations around the bottleneck capacity.
 - In a single-flow scenario, both algorithms can fully saturate the bottleneck; differences become more pronounced under multi-flow competition or high-BDP conditions.
 
 ### Experiment 2: Bufferbloat Verification
@@ -935,7 +945,21 @@ h3 (ping) ---/    10Mbps, 10ms
 - **Small buffer**: The iperf flow saturates the bottleneck and incurs 9.3% packet loss (buffer overflow). RTT stabilizes around 28 ms — latency remains controllable.
 - **Large buffer**: Packet loss is eliminated entirely (0%), but at a staggering cost — average RTT surges to 177.6 ms (**6.3× increase**), with a peak of 251 ms (**7.4× increase over baseline**). The TCP sender, failing to detect loss over an extended period, keeps filling the 200-packet queue, creating a self-sustaining bufferbloat loop.
 
-#### 2.6 Conclusion
+#### 2.6 Latency-Throughput Tradeoff
+
+The bufferbloat experiment reveals a fundamental tension in buffer sizing:
+
+| Buffer Size | Packet Loss | Avg RTT | Throughput | Latency Quality |
+|---|---|---|---|---|
+| 20 packets | 9.3% | 28.2 ms | Near line rate | Good (stable, low jitter) |
+| 200 packets | 0% | 177.6 ms | Near line rate | Poor (6.3× higher, high jitter) |
+
+- **Small buffer**: Achieves low latency (28.2 ms) at the cost of 9.3% packet loss. Lost packets trigger TCP's congestion control, which reduces the sending rate and prevents the queue from growing unbounded — the buffer acts as an implicit congestion signal.
+- **Large buffer**: Eliminates packet loss entirely, but at the expense of excessive queuing delay (avg 177.6 ms, peak 251 ms). TCP, seeing no loss signal, continues to increase cwnd until the buffer is persistently full, creating a standing queue that inflates latency for *all* flows sharing the bottleneck — including latency-sensitive traffic (e.g., the concurrent ping flow).
+
+This tradeoff illustrates why simply maximizing buffer size is harmful: zero packet loss comes at the cost of unacceptable latency for interactive applications. The ideal buffer sizing strategy is to provide just enough buffering to absorb transient bursts while allowing occasional loss to serve as a congestion signal. Modern solutions such as AQM (CoDel, FQ-CoDel, PIE) and ECN marking address this tradeoff by signaling congestion before the buffer overflows, achieving both low latency and high throughput.
+
+#### 2.7 Conclusion
 
 - Bufferbloat is a real and serious problem: a large buffer can degrade latency by up to **12.5×** (20 ms → 251 ms).
 - Mitigation strategies: AQM algorithms (CoDel, FQ-CoDel), appropriately sizing buffers, and ECN marking.
@@ -944,8 +968,8 @@ h3 (ping) ---/    10Mbps, 10ms
 
 Through two Mininet experiments, we verified:
 
-1. **TCP Congestion Control Comparison** — Under a 10 Mbps / 20 ms single-flow scenario, both Reno (10.81 Mbps) and Cubic (9.85 Mbps) can saturate the bottleneck. Cubic delivers more stable throughput (std 1.56 vs. 7.31).
-2. **Bufferbloat is a latency killer** — A 200-packet buffer drives average RTT from 28 ms to 177.6 ms (**6.3× increase**), peaking at 251 ms, trading latency for zero packet loss.
+1. **TCP Congestion Control Comparison** — Under a 10 Mbps / 20 ms single-flow scenario, both Reno (9.49 Mbps) and Cubic (9.61 Mbps) can saturate the bottleneck. Cubic delivers more stable throughput (std 0.90 vs. 1.55).
+2. **Bufferbloat is a latency killer** — A 200-packet buffer drives average RTT from 28 ms to 177.6 ms (**6.3× increase**), peaking at 251 ms, trading latency for zero packet loss. This demonstrates the classic latency-throughput tradeoff: oversized buffers eliminate loss but create excessive queuing delay, motivating AQM-based solutions.
 
 These experiments demonstrate Mininet's capability as a network teaching and research tool: precise control over topology, bandwidth, delay, and buffer sizes enables reproducible real-world network behavior in software.
 
@@ -959,14 +983,3 @@ These experiments demonstrate Mininet's capability as a network teaching and res
 | `experiments/data/*.txt` | Raw experiment data (iperf & ping logs) |
 | `experiments/charts/*.png` | Generated charts (3 figures) |
 
-### Running the Experiments
-
-```bash
-# Collect real data (requires sudo)
-sudo env "PATH=$PATH" python experiments/tcp_cc_test.py
-sudo env "PATH=$PATH" python experiments/bufferbloat_test.py
-
-# Generate charts
-cd experiments
-uv run python analyze.py
-```
