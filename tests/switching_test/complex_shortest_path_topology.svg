@@ -1,0 +1,99 @@
+<svg width="920" height="560" viewBox="0 0 920 560" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="920" height="560" fill="#F7F8FA"/>
+
+  <style>
+    .title { font: 700 22px Arial, sans-serif; fill: #111827; }
+    .subtitle { font: 400 14px Arial, sans-serif; fill: #4B5563; }
+    .legend { font: 400 13px Arial, sans-serif; fill: #374151; }
+    .sw { font: 700 16px Arial, sans-serif; fill: #1E40AF; }
+    .host { font: 700 15px Arial, sans-serif; fill: #166534; }
+    .ip { font: 400 11px Arial, sans-serif; fill: #4B5563; }
+    .ring { stroke: #2563EB; stroke-width: 3; }
+    .chord { stroke: #7C3AED; stroke-width: 3; stroke-dasharray: 8 6; }
+    .hostlink { stroke: #16A34A; stroke-width: 2.5; }
+  </style>
+
+  <text x="40" y="36" class="title">Complex Shortest-Path Test Topology</text>
+  <text x="40" y="58" class="subtitle">8 hosts, 8 switches, 10 inter-switch links (outer ring + inner chords)</text>
+  <text x="40" y="78" class="legend">Blue solid = outer ring s1-s2-s4-s7-s6-s3-s1  |  Purple dashed = inner chords</text>
+  <text x="40" y="98" class="legend">Green = host-to-switch only (hi connects to si, never between switches)</text>
+
+  <!-- inter-switch: outer ring -->
+  <line x1="250" y1="400" x2="250" y2="250" class="ring"/>
+  <line x1="250" y1="250" x2="250" y2="100" class="ring"/>
+  <line x1="250" y1="100" x2="550" y2="100" class="ring"/>
+  <line x1="550" y1="100" x2="550" y2="250" class="ring"/>
+  <line x1="550" y1="250" x2="550" y2="400" class="ring"/>
+  <line x1="550" y1="400" x2="250" y2="400" class="ring"/>
+
+  <!-- inter-switch: inner chords -->
+  <line x1="250" y1="250" x2="400" y2="250" class="chord"/>
+  <line x1="400" y1="250" x2="550" y2="250" class="chord"/>
+  <line x1="750" y1="250" x2="550" y2="250" class="chord"/>
+  <line x1="550" y1="400" x2="750" y2="250" class="chord"/>
+
+  <!-- switches -->
+  <rect x="200" y="370" width="100" height="60" rx="10" fill="#DBEAFE" stroke="#2563EB" stroke-width="2.5"/>
+  <text x="238" y="405" class="sw">s1</text>
+  <rect x="200" y="220" width="100" height="60" rx="10" fill="#DBEAFE" stroke="#2563EB" stroke-width="2.5"/>
+  <text x="238" y="255" class="sw">s2</text>
+  <rect x="200" y="70" width="100" height="60" rx="10" fill="#DBEAFE" stroke="#2563EB" stroke-width="2.5"/>
+  <text x="238" y="105" class="sw">s4</text>
+  <rect x="500" y="70" width="100" height="60" rx="10" fill="#DBEAFE" stroke="#2563EB" stroke-width="2.5"/>
+  <text x="538" y="105" class="sw">s7</text>
+  <rect x="500" y="220" width="100" height="60" rx="10" fill="#DBEAFE" stroke="#2563EB" stroke-width="2.5"/>
+  <text x="538" y="255" class="sw">s6</text>
+  <rect x="500" y="370" width="100" height="60" rx="10" fill="#DBEAFE" stroke="#2563EB" stroke-width="2.5"/>
+  <text x="538" y="405" class="sw">s3</text>
+  <rect x="350" y="220" width="100" height="60" rx="10" fill="#DBEAFE" stroke="#2563EB" stroke-width="2.5"/>
+  <text x="388" y="255" class="sw">s5</text>
+  <rect x="700" y="220" width="100" height="60" rx="10" fill="#DBEAFE" stroke="#2563EB" stroke-width="2.5"/>
+  <text x="738" y="255" class="sw">s8</text>
+
+  <!-- host links -->
+  <line x1="130" y1="400" x2="200" y2="400" class="hostlink"/>
+  <line x1="130" y1="250" x2="200" y2="250" class="hostlink"/>
+  <line x1="130" y1="100" x2="200" y2="100" class="hostlink"/>
+  <line x1="550" y1="40" x2="550" y2="70" class="hostlink"/>
+  <line x1="350" y1="320" x2="400" y2="280" class="hostlink"/>
+  <line x1="630" y1="250" x2="600" y2="250" class="hostlink"/>
+  <line x1="630" y1="400" x2="600" y2="400" class="hostlink"/>
+  <line x1="820" y1="250" x2="800" y2="250" class="hostlink"/>
+
+  <!-- hosts -->
+  <circle cx="100" cy="400" r="36" fill="#DCFCE7" stroke="#16A34A" stroke-width="2.5"/>
+  <text x="88" y="396" class="host">h1</text>
+  <text x="72" y="414" class="ip">.10.1</text>
+
+  <circle cx="100" cy="250" r="36" fill="#DCFCE7" stroke="#16A34A" stroke-width="2.5"/>
+  <text x="88" y="246" class="host">h2</text>
+  <text x="72" y="264" class="ip">.10.2</text>
+
+  <circle cx="100" cy="100" r="36" fill="#DCFCE7" stroke="#16A34A" stroke-width="2.5"/>
+  <text x="88" y="96" class="host">h4</text>
+  <text x="72" y="114" class="ip">.10.4</text>
+
+  <circle cx="550" cy="30" r="36" fill="#DCFCE7" stroke="#16A34A" stroke-width="2.5"/>
+  <text x="538" y="26" class="host">h7</text>
+  <text x="522" y="44" class="ip">.10.7</text>
+
+  <circle cx="350" cy="340" r="36" fill="#DCFCE7" stroke="#16A34A" stroke-width="2.5"/>
+  <text x="338" y="336" class="host">h5</text>
+  <text x="322" y="354" class="ip">.10.5</text>
+
+  <circle cx="660" cy="250" r="36" fill="#DCFCE7" stroke="#16A34A" stroke-width="2.5"/>
+  <text x="648" y="246" class="host">h6</text>
+  <text x="632" y="264" class="ip">.10.6</text>
+
+  <circle cx="660" cy="400" r="36" fill="#DCFCE7" stroke="#16A34A" stroke-width="2.5"/>
+  <text x="648" y="396" class="host">h3</text>
+  <text x="632" y="414" class="ip">.10.3</text>
+
+  <circle cx="850" cy="250" r="36" fill="#DCFCE7" stroke="#16A34A" stroke-width="2.5"/>
+  <text x="838" y="246" class="host">h8</text>
+  <text x="822" y="264" class="ip">.10.8</text>
+
+  <rect x="40" y="480" width="840" height="68" rx="8" fill="#FFFFFF" stroke="#D1D5DB" stroke-width="1.5"/>
+  <text x="56" y="504" class="legend">Ring: s1-s2, s2-s4, s4-s7, s7-s6, s6-s3, s3-s1</text>
+  <text x="56" y="526" class="legend">Chords: s2-s5, s5-s6, s6-s8, s8-s3</text>
+</svg>

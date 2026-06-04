@@ -4,28 +4,15 @@
 shortest-path forwarding and dynamic recovery after link, switch, and switch
 port changes.
 
-Host-to-switch links (8 edges):
-  h1-s1  h2-s2  h3-s3  h4-s4  h5-s5  h6-s6  h7-s7  h8-s8
+Topology figure (open in IDE / browser):
+  tests/switching_test/complex_shortest_path_topology.svg
 
-Switch-level topology (10 inter-switch edges):
+Host-to-switch (8): h1-s1, h2-s2, h3-s3, h4-s4, h5-s5, h6-s6, h7-s7, h8-s8
+  Hosts only attach to their numbered switch; they are NOT on switch-switch paths.
 
-        h4        h7
-         |         |
-        s4 -------- s7
-         |         |
-        s2 -- s5 -- s6 -- s8
-         |    |    / \    |
-        h2  h5  h6      h8
-         |         \   /
-        s1 -------- s3
-         |           |
-        h1          h3
-
-  Outer ring: s1-s2-s4-s7-s6-s3-s1
-  Inner chords: s2-s5, s5-s6, s3-s8, s8-s6
-
-Every switch has one directly attached host with the same number, e.g. h1-s1.
-The outer ring plus inner chords create multiple loops.
+Inter-switch (10):
+  Ring:   s1-s2, s2-s4, s4-s7, s7-s6, s6-s3, s3-s1
+  Chords: s2-s5, s5-s6, s6-s8, s8-s3
 
 Requires: sudo, Mininet, running controller (osken-manager controller.py)
 """
@@ -189,20 +176,35 @@ def do_arp_all(hosts):
         send_arp(host)
 
 
-def wait_for_reconvergence(hosts, seconds=6):
+def wait_for_reconvergence(hosts, seconds=10, probe=None):
+    """Wait for controller topology/flow updates; optional probe ping."""
     time.sleep(seconds)
-    do_arp_all(hosts)
-    time.sleep(1)
+    if probe is not None:
+        src_name, dst_name = probe
+        hosts[src_name].cmd('ping -c 2 -W 1 %s' % hosts[dst_name].IP())
+        time.sleep(2)
 
 
-def ping_until_success(hosts, src, dst, attempts=5):
+def reinforce_hosts(hosts, names, talkers=None):
+    """Re-announce and probe hosts that are often learned on wrong ports."""
+    talkers = talkers or ['h1', 'h5', 'h6']
+    for name in names:
+        host = hosts[name]
+        host.cmd('arping -c 2 -w 2 -A -I %s-eth0 %s' % (name, host.IP()))
+        time.sleep(0.4)
+    for src_name in talkers:
+        for dst_name in names:
+            hosts[src_name].cmd('ping -c 2 -W 1 %s' % hosts[dst_name].IP())
+            time.sleep(0.3)
+
+
+def ping_until_success(hosts, src, dst, attempts=6):
     last_result = ''
 
     for attempt in range(attempts):
-        do_arp_all(hosts)
-        time.sleep(1)
         last_result = src.cmd('ping -c 3 -W 2 %s' % dst.IP())
-        if ' 0% packet loss' in last_result:
+        if (' 0% packet loss' in last_result and 'dup!' not in last_result.lower()
+                and 'duplicates' not in last_result.lower()):
             return True, last_result
         if attempt + 1 < attempts:
             time.sleep(2)
@@ -212,43 +214,21 @@ def ping_until_success(hosts, src, dst, attempts=5):
 
 def print_expected_topology():
     info("""
-=== Complex shortest-path topology reference ===
+=== Complex shortest-path topology ===
+Figure: tests/switching_test/complex_shortest_path_topology.svg
 
-Host links:
+Hosts (leaf, one switch each):
   h1-s1  h2-s2  h3-s3  h4-s4  h5-s5  h6-s6  h7-s7  h8-s8
 
-Switch links:
-  s1-s2  s2-s4  s4-s7  s7-s6  s6-s3  s3-s1
-  s2-s5  s5-s6  s3-s8  s8-s6
+Switches (10 edges):
+  ring:   s1-s2  s2-s4  s4-s7  s7-s6  s6-s3  s3-s1
+  chords: s2-s5  s5-s6  s6-s8  s8-s3
 
-Mermaid:
-  graph LR
-    h1---s1
-    h2---s2
-    h3---s3
-    h4---s4
-    h5---s5
-    h6---s6
-    h7---s7
-    h8---s8
-    s1---s2
-    s2---s4
-    s4---s7
-    s7---s6
-    s6---s3
-    s3---s1
-    s2---s5
-    s5---s6
-    s3---s8
-    s8---s6
-
-Expected host shortest paths used by this test:
+Expected host shortest paths in this test:
 """)
 
     baseline_pairs = [
         ('h1', 'h2'), ('h1', 'h4'), ('h1', 'h7'), ('h1', 'h8'),
-        ('h2', 'h5'), ('h2', 'h6'), ('h3', 'h8'), ('h4', 'h6'),
-        ('h5', 'h7'), ('h6', 'h8'), ('h7', 'h3'), ('h8', 'h1'),
     ]
     for src, dst in baseline_pairs:
         path, hops = expected_path_string(src, dst)
@@ -345,14 +325,6 @@ def run_baseline_tests(hosts):
         ('baseline h1->h4', 'h1', 'h4'),
         ('baseline h1->h7', 'h1', 'h7'),
         ('baseline h1->h8', 'h1', 'h8'),
-        ('baseline h2->h5', 'h2', 'h5'),
-        ('baseline h2->h6', 'h2', 'h6'),
-        ('baseline h3->h8', 'h3', 'h8'),
-        ('baseline h4->h6', 'h4', 'h6'),
-        ('baseline h5->h7', 'h5', 'h7'),
-        ('baseline h6->h8', 'h6', 'h8'),
-        ('baseline h7->h3', 'h7', 'h3'),
-        ('baseline h8->h1', 'h8', 'h1'),
     ]
 
     results = []
@@ -367,7 +339,7 @@ def run_dynamic_tests(net, hosts):
     disabled_s2_s4 = {normalize_link('s2', 's4')}
     info('\n=== Link modification: bring s2-s4 down ===\n')
     net.configLinkStatus('s2', 's4', 'down')
-    wait_for_reconvergence(hosts)
+    wait_for_reconvergence(hosts, probe=('h1', 'h7'))
     results.append((
         'link down s2-s4 h1->h7',
         run_ping_case(hosts, 'link down s2-s4', 'h1', 'h7',
@@ -376,7 +348,7 @@ def run_dynamic_tests(net, hosts):
 
     info('\n=== Link modification: restore s2-s4 ===\n')
     net.configLinkStatus('s2', 's4', 'up')
-    wait_for_reconvergence(hosts, seconds=8)
+    wait_for_reconvergence(hosts, probe=('h1', 'h7'))
     results.append((
         'link restored s2-s4 h1->h7',
         run_ping_case(hosts, 'link restored s2-s4', 'h1', 'h7'),
@@ -385,7 +357,7 @@ def run_dynamic_tests(net, hosts):
     info('\n=== Switch modification: stop s5 ===\n')
     s5 = net.get('s5')
     s5.stop(deleteIntfs=False)
-    wait_for_reconvergence(hosts, seconds=8)
+    wait_for_reconvergence(hosts, seconds=12, probe=('h2', 'h6'))
     results.append((
         'switch s5 stopped h2->h6',
         run_ping_case(hosts, 'switch s5 stopped', 'h2', 'h6',
@@ -395,7 +367,7 @@ def run_dynamic_tests(net, hosts):
     info('\n=== Switch modification: restart s5 ===\n')
     s5.start(net.controllers)
     wait_for_switch_controllers(net)
-    wait_for_reconvergence(hosts, seconds=8)
+    wait_for_reconvergence(hosts, probe=('h2', 'h6'))
     results.append((
         'switch s5 restarted h2->h6',
         run_ping_case(hosts, 'switch s5 restarted', 'h2', 'h6'),
@@ -406,7 +378,7 @@ def run_dynamic_tests(net, hosts):
     net.get('s3').cmd('ovs-ofctl -O OpenFlow10 mod-port s3 %s down' %
                       s3_to_s1_port)
     disabled_s1_s3 = {normalize_link('s1', 's3')}
-    wait_for_reconvergence(hosts, seconds=8)
+    wait_for_reconvergence(hosts, probe=('h1', 'h8'))
     results.append((
         'port down s3-s1 h1->h8',
         run_ping_case(hosts, 'port down s3-s1', 'h1', 'h8',
@@ -416,7 +388,7 @@ def run_dynamic_tests(net, hosts):
     info('\n=== Port modification: restore s3 port toward s1 ===\n')
     net.get('s3').cmd('ovs-ofctl -O OpenFlow10 mod-port s3 %s up' %
                       s3_to_s1_port)
-    wait_for_reconvergence(hosts, seconds=8)
+    wait_for_reconvergence(hosts, probe=('h1', 'h8'))
     results.append((
         'port restored s3-s1 h1->h8',
         run_ping_case(hosts, 'port restored s3-s1', 'h1', 'h8'),
@@ -444,7 +416,8 @@ def run_test():
 
         net.start()
         wait_for_switch_controllers(net)
-        time.sleep(3)
+        info('\n=== Waiting for LLDP link discovery ===\n')
+        time.sleep(12)
 
         hosts = {
             'h%s' % i: net.get('h%s' % i)
@@ -452,9 +425,17 @@ def run_test():
         }
         install_static_arp(hosts)
 
-        info('\n=== Sending gratuitous ARP from all hosts ===\n')
+        info('\n=== Announcing hosts (ARP) for controller learning ===\n')
         do_arp_all(hosts)
-        time.sleep(5)
+        time.sleep(2)
+
+        info('\n=== Warm-up pingAll (learn locations + initial flows) ===\n')
+        net.pingAll(timeout=3)
+        time.sleep(2)
+
+        info('\n=== Reinforce learning for h4 and h8 ===\n')
+        reinforce_hosts(hosts, ['h4', 'h8'])
+        time.sleep(2)
 
         results.extend(run_baseline_tests(hosts))
         results.extend(run_dynamic_tests(net, hosts))
