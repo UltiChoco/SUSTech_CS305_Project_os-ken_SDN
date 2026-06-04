@@ -58,8 +58,6 @@ The main source files are organized as follows:
 |   |-- nat_test/              NAT manual and automated tests
 |   |-- *_unit_test.py         Unit tests for firewall and routing algorithms
 |-- experiments/               TCP congestion control and bufferbloat experiments
-|-- docs/                      MkDocs documentation
-|-- img/                       Screenshots and report figures
 |-- requirements.txt           Python dependencies for the Mininet VM
 |-- pyproject.toml             Project metadata
 ```
