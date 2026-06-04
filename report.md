@@ -6,7 +6,9 @@ In this project, we developed a Software-Defined Networking (SDN) based network 
 3. **Firewall Management**: The system provides firewall management capabilities, allowing administrators to configure and monitor network security policies.
 
 Also, we implemented some bonus features, such as:
-......
+1. **DHCP Lease Duration & RFC-Inspired Behaviors**: NAK, RELEASE, DECLINE handling, and lease expiration/reclamation.
+2. **DNS UDP/53 A Record Resolution**: Static name resolution with NXDOMAIN for unknown names.
+3. **Mininet Network Experiments**: TCP congestion control algorithm comparison (Reno vs Cubic) and bufferbloat phenomenon verification.
 
 ## System Architecture
 ```
@@ -486,4 +488,164 @@ h1 nslookup h2.local 192.168.1.1
 h1 nslookup unknown.local 192.168.1.1
 h1 nslookup -type=AAAA web.local 192.168.1.1
 h1 nslookup -type=CNAME www.local 192.168.1.1
+```
+
+## Mininet Network Experiments
+
+As a bonus module, we built controllable network environments using Mininet to study two core networking phenomena:
+1. **TCP Congestion Control Algorithm Comparison** (Reno vs Cubic)
+2. **Bufferbloat** — the latency catastrophe caused by oversized buffers
+
+The experiment environment uses Mininet 2.3.0 + iperf + ping. Data analysis and visualization are based on Python with matplotlib and seaborn.
+
+### Experiment 1: TCP Congestion Control (Reno vs Cubic)
+
+#### 1.1 Background
+
+TCP congestion control is the foundation of reliable Internet transport. Reno (1990) and Cubic (2008, Linux default) are two classic algorithms:
+
+- **Reno**: Slow-start + congestion avoidance + fast retransmit/fast recovery. Follows the AIMD rule (Additive Increase Multiplicative Decrease); cwnd is halved upon packet loss.
+- **Cubic**: Replaces AIMD's linear growth with a cubic function, allowing rapid recovery to the previous window after loss. Better suited for high-BDP networks.
+
+#### 1.2 Topology
+
+```
+h1 (sender) --- s1 ========== s2 --- h2 (receiver)
+               Bottleneck: 10Mbps, 20ms
+```
+
+| Parameter | Value |
+|---|---|
+| Bottleneck bandwidth | 10 Mbps |
+| Bottleneck delay | 20 ms |
+| Bottleneck BDP | ≈ 10 Mbps × 0.02 s ÷ (1448 × 8 bits) ≈ 17 segments |
+| Other links | 100 Mbps, 1 ms (no bottleneck) |
+
+#### 1.3 Method
+
+1. Set `sysctl net.ipv4.tcp_congestion_control=reno` / `cubic` on sender `h1`
+2. Run `iperf -c <h2> -t 30 -i 1` to collect per-second throughput samples
+3. Model congestion window evolution using TCP mathematical models (AIMD sawtooth vs. cubic curve)
+
+#### 1.4 Throughput Results
+
+| Metric | TCP Reno | TCP Cubic |
+|---|---|---|
+| Average throughput | **10.81 Mbps** | **9.85 Mbps** |
+| Maximum throughput | 49.30 Mbps | 16.80 Mbps |
+| Minimum throughput | 4.69 Mbps | 7.81 Mbps |
+| Standard deviation | 7.31 Mbps | 1.56 Mbps |
+| Bottleneck utilization | ~108% * | ~99% |
+
+> \* Reno's average exceeds 10 Mbps because the first-second throughput surges to 49.30 Mbps during slow-start (burst), inflating the overall mean. Excluding the first second, Reno stabilizes at an average of 9.49 Mbps (~95% utilization) with a standard deviation of 1.55 Mbps.
+
+<p align="center">
+  <img src="./experiments/charts/tcp_throughput_comparison.png" width="90%"/>
+</p>
+
+<p align="center">
+  <b>Figure 3. TCP Throughput Comparison: Reno vs Cubic (Bottleneck: 10 Mbps, 20 ms RTT).</b>
+</p>
+
+#### 1.5 Congestion Window Analysis
+
+Reno exhibits the classic **AIMD sawtooth pattern**: cwnd grows linearly until it exceeds BDP, then drops by half upon packet loss, and the cycle repeats. Cubic rapidly climbs after loss (cubic function), operates smoothly near the bottleneck, and achieves higher window utilization.
+
+<p align="center">
+  <img src="./experiments/charts/cwnd_evolution.png" width="90%"/>
+</p>
+
+<p align="center">
+  <b>Figure 4. Congestion Window Evolution: Reno AIMD Sawtooth (top) vs Cubic Growth + Fast Recovery (bottom).</b>
+</p>
+
+#### 1.6 Conclusion
+
+- Under a single-flow, 10 Mbps / 20 ms bottleneck, both Reno (10.81 Mbps) and Cubic (9.85 Mbps) achieve comparable throughput. Reno's initial burst (49.30 Mbps) inflates its average; excluding the first second it stabilizes around 9.49 Mbps.
+- Cubic delivers more stable throughput (std 1.56 vs. 7.31), with smaller fluctuations.
+- In a single-flow scenario, both algorithms can fully saturate the bottleneck; differences become more pronounced under multi-flow competition or high-BDP conditions.
+
+### Experiment 2: Bufferbloat Verification
+
+#### 2.1 Background
+
+Bufferbloat refers to excessive packet queuing delay caused by oversized network device buffers. A large buffer can inflate millisecond-scale RTT to hundreds of milliseconds when a TCP flow saturates the bottleneck, severely degrading interactive applications (VoIP, gaming, web browsing).
+
+Core mechanism: TCP relies on packet loss as a congestion signal. A large buffer delays the occurrence of loss, causing the sender to keep increasing cwnd, which fills the buffer further and sustains high latency — a vicious cycle.
+
+#### 2.2 Topology
+
+```
+h1 (iperf) --- s1 ========== s2 --- h2
+h3 (ping) ---/    10Mbps, 10ms
+```
+
+| Role | Host | Description |
+|---|---|---|
+| Long flow | h1 → h2 | iperf TCP flow saturating the bottleneck |
+| Latency probe | h3 → h2 | Concurrent ping (0.2 s interval), measuring queuing delay |
+| **Variable** | s1 egress queue | 20 packets vs. 200 packets |
+
+#### 2.3 Method
+
+1. First run with `max_queue_size=20`, then repeat with `200`
+2. Each run starts an h1→h2 iperf long flow (20 s) while h3 continuously pings h2
+3. Record ping RTT time series and compare latency behavior under both buffer sizes
+
+#### 2.4 RTT Results
+
+| Metric | Small Buffer (20 pkts) | Large Buffer (200 pkts) |
+|---|---|---|
+| Average RTT | **28.2 ms** | **177.6 ms** |
+| Minimum RTT | 20.1 ms | 20.1 ms |
+| Maximum RTT | 34.1 ms | **251.0 ms** |
+| Packet loss rate | 9.3% | 0% |
+
+<p align="center">
+  <img src="./experiments/charts/bufferbloat_comparison.png" width="90%"/>
+</p>
+
+<p align="center">
+  <b>Figure 5. Bufferbloat Comparison: Small Buffer (top, 20 pkts) vs Large Buffer (bottom, 200 pkts).</b>
+</p>
+
+#### 2.5 Analysis
+
+- **Small buffer**: The iperf flow saturates the bottleneck and incurs 9.3% packet loss (buffer overflow). RTT stabilizes around 28 ms — latency remains controllable.
+- **Large buffer**: Packet loss is eliminated entirely (0%), but at a staggering cost — average RTT surges to 177.6 ms (**6.3× increase**), with a peak of 251 ms (**7.4× increase over baseline**). The TCP sender, failing to detect loss over an extended period, keeps filling the 200-packet queue, creating a self-sustaining bufferbloat loop.
+
+#### 2.6 Conclusion
+
+- Bufferbloat is a real and serious problem: a large buffer can degrade latency by up to **12.5×** (20 ms → 251 ms).
+- Mitigation strategies: AQM algorithms (CoDel, FQ-CoDel), appropriately sizing buffers, and ECN marking.
+
+### Experiment Summary
+
+Through two Mininet experiments, we verified:
+
+1. **TCP Congestion Control Comparison** — Under a 10 Mbps / 20 ms single-flow scenario, both Reno (10.81 Mbps) and Cubic (9.85 Mbps) can saturate the bottleneck. Cubic delivers more stable throughput (std 1.56 vs. 7.31).
+2. **Bufferbloat is a latency killer** — A 200-packet buffer drives average RTT from 28 ms to 177.6 ms (**6.3× increase**), peaking at 251 ms, trading latency for zero packet loss.
+
+These experiments demonstrate Mininet's capability as a network teaching and research tool: precise control over topology, bandwidth, delay, and buffer sizes enables reproducible real-world network behavior in software.
+
+### Experiment File Structure
+
+| File | Description |
+|---|---|
+| `experiments/tcp_cc_test.py` | TCP congestion control experiment script |
+| `experiments/bufferbloat_test.py` | Bufferbloat experiment script |
+| `experiments/analyze.py` | Data analysis and chart generation |
+| `experiments/data/*.txt` | Raw experiment data (iperf & ping logs) |
+| `experiments/charts/*.png` | Generated charts (3 figures) |
+
+### Running the Experiments
+
+```bash
+# Collect real data (requires sudo)
+sudo env "PATH=$PATH" python experiments/tcp_cc_test.py
+sudo env "PATH=$PATH" python experiments/bufferbloat_test.py
+
+# Generate charts
+cd experiments
+uv run python analyze.py
 ```

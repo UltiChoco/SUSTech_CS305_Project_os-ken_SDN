@@ -18,8 +18,8 @@ h1 --- s1 ------------ s2 --- h2
 ### 方法
 1. 分别设置发送端 h1 的拥塞控制算法为 reno 和 cubic
 2. 使用 iperf 在 h1-h2 间建立单个 TCP 连接，持续 30 秒
-3. 用 tcpdump 在 h1 出口抓包，记录所有 TCP 包
-4. 提取 TCP 序列号-时间数据，绘制拥塞窗口变化曲线
+3. 通过 iperf `-i 1` 参数采集每秒吞吐量数据
+4. 结合 TCP 数学模型模拟拥塞窗口演变（AIMD 锯形 vs 三次曲线）
 5. 对比两种算法的吞吐量、收敛速度、丢包恢复行为
 
 ### 预期结果
@@ -27,8 +27,8 @@ h1 --- s1 ------------ s2 --- h2
 - Cubic: 三次函数增长，丢包后快速恢复到接近原窗口，带宽利用率更高
 
 ### 数据采集
-- h1 出口 pcap 文件
-- iperf 吞吐量报告
+- iperf 吞吐量报告（`-i 1` 每秒采样）
+- ping RTT 时间序列
 
 ---
 
@@ -70,24 +70,24 @@ h3 ---/
 | 工具 | 用途 |
 |---|---|
 | `iperf` | TCP 流量生成 |
-| `tcpdump` | 抓包 |
-| `python3` + `matplotlib` + `numpy` | 数据分析与绘图 |
+| `ping` | 延迟探测 |
+| `python3` + `matplotlib` + `seaborn` + `numpy` | 数据分析与绘图 |
 | `mininet` | 拓扑搭建 (已安装) |
 
 ## 运行步骤
 
 ```bash
 # 1. 安装 Python 依赖
-source ~/.venvs/cs305-uv/bin/activate
-uv pip install matplotlib numpy
+cd experiments
+uv sync
 
 # 2. 运行实验 (需要 sudo)
 sudo env "PATH=$PATH" python experiments/tcp_cc_test.py
 sudo env "PATH=$PATH" python experiments/bufferbloat_test.py
 
 # 3. 生成图表
-source ~/.venvs/cs305-uv/bin/activate
-python experiments/analyze.py
+cd experiments
+uv run python analyze.py
 ```
 
 > 注: 若无 sudo 权限，`analyze.py` 会自动使用模拟数据生成示例图表。真实实验数据在 `experiments/data/` 目录中会覆盖模拟数据。
@@ -101,16 +101,16 @@ experiments/
 ├── EXPERIMENT.md           # 本文件：实验方案
 ├── tcp_cc_test.py          # 实验一脚本
 ├── bufferbloat_test.py     # 实验二脚本
-├── requirements.txt        # Python 依赖 (matplotlib, numpy)
 ├── data/                   # 采集的原始数据
-│   ├── reno.pcap
-│   ├── cubic.pcap
-│   ├── ping_small_buf.txt
-│   ├── ping_large_buf.txt
-│   └── ...
+│   ├── reno_iperf.txt
+│   ├── cubic_iperf.txt
+│   ├── iperf_q20.txt
+│   ├── iperf_q200.txt
+│   ├── ping_q20.txt
+│   └── ping_q200.txt
 ├── charts/                 # 生成的图表
-│   ├── reno_cwnd.png
-│   ├── cubic_cwnd.png
-│   └── bufferbloat_rtt.png
+│   ├── tcp_throughput_comparison.png
+│   ├── cwnd_evolution.png
+│   └── bufferbloat_comparison.png
 └── analyze.py              # 数据分析与绘图脚本
 ```
