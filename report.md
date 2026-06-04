@@ -8,7 +8,8 @@ In this project, we developed a Software-Defined Networking (SDN) based network 
 Also, we implemented some bonus features, such as:
 1. **DHCP Lease Duration & RFC-Inspired Behaviors**: NAK, RELEASE, DECLINE handling, and lease expiration/reclamation.
 2. **DNS UDP/53 A Record Resolution**: Static name resolution with NXDOMAIN for unknown names.
-3. **Mininet Network Experiments**: TCP congestion control algorithm comparison (Reno vs Cubic) and bufferbloat phenomenon verification.
+3. **NAT Gateway**: ICMP SNAT/DNAT with NAT table management and proxy ARP for external hosts.
+4. **Mininet Network Experiments**: TCP congestion control algorithm comparison (Reno vs Cubic) and bufferbloat phenomenon verification.
 
 ## System Architecture
 ```
@@ -489,6 +490,157 @@ h1 nslookup unknown.local 192.168.1.1
 h1 nslookup -type=AAAA web.local 192.168.1.1
 h1 nslookup -type=CNAME www.local 192.168.1.1
 ```
+
+## NAT Implementation
+
+### 1. Design Goal
+
+The NAT (Network Address Translation) module implements a simple NAT gateway that allows internal hosts (on `192.168.1.0/24`) to communicate with external hosts through address translation. This is a bonus feature that demonstrates SDN's capability to implement network-layer services.
+
+The NAT module has three main goals:
+
+1. translate internal host source IP addresses to the NAT server IP for outgoing traffic (SNAT);
+2. translate incoming replies from external hosts back to the correct internal host (DNAT);
+3. proxy ARP requests for external IP addresses so internal hosts can resolve them.
+
+The NAT logic is mainly implemented in `nat.py`, while `controller.py` integrates NAT handling into the packet-in handler and ARP handler.
+
+### 2. NAT Configuration
+
+The NAT configuration is defined in the `NATConfig` class:
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| `internal_subnet` | `192.168.1.0/24` | Internal network subnet |
+| `server_ip` | `192.168.1.1` | NAT gateway IP (mapped as source IP for SNAT) |
+| `server_mac` | `7e:49:b3:f0:f9:99` | NAT gateway MAC (controller MAC) |
+| `icmp_timeout` | `30 s` | ICMP NAT entry timeout |
+| `tcp_timeout` | `300 s` | TCP NAT entry timeout |
+| `udp_timeout` | `60 s` | UDP NAT entry timeout |
+
+### 3. NAT Table Design
+
+The NAT server maintains three `OrderedDict`-based translation tables to track active NAT sessions:
+
+| Table | Key | Value | Purpose |
+|-------|-----|-------|---------|
+| `_icmp_map` | `(external_ip, icmp_id)` | `(internal_ip, expire_time)` | ICMP NAT mappings |
+| `_tcp_map` | `(external_ip, tcp_port)` | `(internal_ip, internal_port, expire_time)` | TCP NAT mappings |
+| `_udp_map` | `(external_ip, udp_port)` | `(internal_ip, internal_port, expire_time)` | UDP NAT mappings |
+
+In our implementation, the project focuses on **ICMP NAT** as a demonstration, with the TCP and UDP table structures prepared for future extension.
+
+Expired NAT entries are cleaned up automatically before each lookup via `_cleanup_expired()`.
+
+### 4. NAT Processing Flow
+
+The NAT processing is integrated at two points in the controller:
+
+#### 4.1 Proxy ARP for External IPs
+
+When an internal host sends an ARP request for an external IP (i.e., destination is outside `192.168.1.0/24`), the controller responds with the NAT gateway MAC address (`7e:49:b3:f0:f9:99`):
+
+```text
+Internal Host                    Controller
+    |  ARP request: who-has 10.0.0.2?   |
+    |  ---------------------------------> |
+    |                                     |
+    |  ARP reply: 10.0.0.2 is-at NAT-MAC |
+    |  <--------------------------------- |
+```
+
+This is implemented in `controller.py` `_handle_arp()`, which checks `NATServer.is_internal(src_ip)` and `NATServer.is_external(dst_ip)` before normal ARP proxy logic.
+
+#### 4.2 Packet-In NAT Translation
+
+In `packet_in_handler()`, before normal IP forwarding, the controller calls `NATServer.handle_nat()`:
+
+```mermaid
+sequenceDiagram
+    participant H1 as h1 (192.168.1.x)
+    participant S as Switch
+    participant C as Controller
+    participant H2 as h2 (10.0.0.2)
+
+    H1->>S: ICMP echo request<br/>src=192.168.1.x → dst=10.0.0.2
+    S->>C: PacketIn
+
+    C->>C: SNAT: record (10.0.0.2, icmp_id) → (192.168.1.x)
+    C->>C: Rewrite src IP → 192.168.1.1
+    C->>C: Rewrite src MAC → NAT-MAC
+    C->>S: PacketOut (rewritten)
+    S->>H2: ICMP echo request<br/>src=192.168.1.1 → dst=10.0.0.2
+
+    H2->>S: ICMP echo reply<br/>src=10.0.0.2 → dst=192.168.1.1
+    S->>C: PacketIn
+
+    C->>C: DNAT: lookup (10.0.0.2, icmp_id) → 192.168.1.x
+    C->>C: Rewrite dst IP → 192.168.1.x
+    C->>C: Rewrite dst MAC → h1-MAC
+    C->>S: PacketOut (rewritten)
+    S->>H1: ICMP echo reply<br/>src=10.0.0.2 → dst=192.168.1.x
+```
+
+#### 4.3 SNAT (Source NAT)
+
+When an internal host sends a packet to an external host, the `_build_snat_icmp_packet()` method:
+
+1. Extracts the original ICMP echo request fields (id, seq, payload).
+2. Creates a NAT mapping entry: `(dst_ip, icmp_id) → (internal_ip, expire_time)`.
+3. Rebuilds the packet with:
+   - Source IP = `192.168.1.1` (NAT IP)
+   - Source MAC = `7e:49:b3:f0:f9:99` (NAT MAC)
+   - Destination IP/MAC = unchanged original destination.
+4. Sends the translated packet via `PacketOut` to the destination host's switch port.
+
+#### 4.4 DNAT (Destination NAT)
+
+When an external host sends a reply to the NAT IP (`192.168.1.1`), the `_build_dnat_icmp_packet()` method:
+
+1. Looks up the ICMP ID in `_icmp_map` to find the original internal IP.
+2. Looks up the internal MAC via `controller.ip_to_mac`.
+3. Rebuilds the packet with:
+   - Destination IP = original internal IP.
+   - Destination MAC = original internal MAC.
+4. Consumes the NAT entry (deletes from map) since ICMP echo reply is the final packet.
+5. Sends the translated packet via `PacketOut` to the internal host's switch port.
+
+### 5. NAT Test
+
+The NAT test is implemented in `tests/nat_test/test_network.py`. It builds a simple topology:
+
+```mermaid
+graph LR
+    h1[h1<br/>DHCP from<br/>192.168.1.0/24] --- s1[s1]
+    h2[h2<br/>Static 10.0.0.2/8] --- s1
+```
+
+The test performs the following steps:
+
+1. Start Mininet with 1 switch, 2 hosts. `h1` uses DHCP to get an internal IP; `h2` has a static external IP `10.0.0.2/8`.
+2. Send gratuitous ARP from `h2` so the controller learns its location.
+3. Ping from `h1` to `10.0.0.2` — verify that NAT translates the request and reply successfully.
+
+The controller log shows the NAT translation process:
+
+```text
+NAT Proxy ARP: 10.0.0.2 is-at 7e:49:b3:f0:f9:99 (to 192.168.1.2)
+NAT-SNAT: 192.168.1.2 -> 10.0.0.2 (ICMP)
+NAT-DNAT: 10.0.0.2 -> 00:00:00:00:00:01 (ICMP)
+```
+
+This demonstrates:
+- Internal ARP requests for external IPs are proxied by the controller with the NAT MAC.
+- Outgoing ICMP packets are correctly SNATed (source IP rewritten from `192.168.1.x` to `192.168.1.1`).
+- Incoming ICMP replies are correctly DNATed (destination IP rewritten from `192.168.1.1` to `192.168.1.x`).
+
+### 6. Discussion
+
+The current NAT implementation focuses on ICMP as a proof of concept, with the following design considerations:
+
+- **ICMP NAT**: Uses `(dst_ip, icmp_id)` as the translation key, which is sufficient for ICMP echo request/reply pairs. The NAT entry is consumed after DNAT since the echo reply completes the exchange.
+- **TCP/UDP extension**: The `_tcp_map` and `_udp_map` tables are prepared with port-based translation keys, following the standard NAPT (Network Address Port Translation) pattern. Extending to TCP/UDP would require rewriting transport-layer checksums in addition to IP header modification.
+- **NAT entry cleanup**: Expired entries are cleaned lazily before each lookup, avoiding the need for periodic timer threads.
 
 ## Mininet Network Experiments
 
