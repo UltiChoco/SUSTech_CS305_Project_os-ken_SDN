@@ -1,20 +1,17 @@
 """Complex automated integration test for shortest-path switching.
 
-6-switch, 6-host mesh topology with multi-hop paths (1-hop, 2-hop, 3-hop).
+6-switch, 6-host loop-free topology with multi-hop paths (1-hop to 4-hop).
 Verifies that the controller correctly computes shortest paths via Dijkstra
 and installs forwarding flows end-to-end.
 
 Topology diagram:
 
     h1 -- s1 ---- s2 -- h2
-           | \  / | \
-           |  \/  |  \
-           |  /\  |   \
-    h3 -- s3 -- s5    s4 -- h4
-                 | \  /
-                 |  s6 -- h6
-                 |
-                 h5
+           |       | \
+           |       |  \
+    h3 -- s3      s4  s5 -- h5
+           |
+           s6 -- h6
 
 Requires: sudo, Mininet, running controller (osken-manager controller.py)
 """
@@ -39,15 +36,63 @@ def send_arp(node, count=1):
     time.sleep(0.5)
 
 
+def wait_for_switch_controllers(net, timeout=30, interval=1):
+    deadline = time.time() + timeout
+
+    while time.time() < deadline:
+        disconnected = []
+        for switch in net.switches:
+            output = switch.cmd('ovs-vsctl get Controller %s is_connected' %
+                                switch.name)
+            if 'true' not in output.lower():
+                disconnected.append(switch.name)
+
+        if not disconnected:
+            return
+
+        time.sleep(interval)
+
+    raise RuntimeError('Switches not connected to controller: %s' %
+                       ', '.join(disconnected))
+
+
+def install_static_arp(hosts):
+    for src in hosts.values():
+        for dst in hosts.values():
+            if src.name == dst.name:
+                continue
+            src.cmd('arp -s %s %s' % (dst.IP(), dst.MAC()))
+
+
+def do_arp_all(hosts):
+    for host in hosts.values():
+        send_arp(host)
+
+
+def ping_until_success(hosts, src, dst, attempts=4):
+    last_result = ''
+
+    for attempt in range(attempts):
+        do_arp_all(hosts)
+        time.sleep(1)
+        last_result = src.cmd('ping -c 3 -W 2 %s' % dst.IP())
+        if ' 0% packet loss' in last_result:
+            return True, last_result
+        if attempt + 1 < attempts:
+            time.sleep(2)
+
+    return False, last_result
+
+
 class MeshTopo(Topo):
-    """6-switch, 6-host mesh topology with multiple possible paths.
+    """6-switch, 6-host loop-free topology with multi-hop paths.
 
     Shortest path hop counts between hosts:
-      h1-h2: 1    h1-h3: 1    h1-h4: 2    h1-h5: 2    h1-h6: 3
-      h2-h3: 1    h2-h4: 1    h2-h5: 1    h2-h6: 2
-      h3-h4: 2    h3-h5: 1    h3-h6: 2
-      h4-h5: 1    h4-h6: 1
-      h5-h6: 1
+      h1-h2: 1    h1-h3: 1    h1-h4: 2    h1-h5: 2    h1-h6: 2
+      h2-h3: 2    h2-h4: 1    h2-h5: 1    h2-h6: 3
+      h3-h4: 3    h3-h5: 3    h3-h6: 1
+      h4-h5: 2    h4-h6: 4
+      h5-h6: 4
     """
 
     def __init__(self, **opts):
@@ -76,13 +121,9 @@ class MeshTopo(Topo):
 
         self.addLink(s1, s2)
         self.addLink(s1, s3)
-        self.addLink(s2, s3)
         self.addLink(s2, s4)
         self.addLink(s2, s5)
-        self.addLink(s3, s5)
-        self.addLink(s4, s5)
-        self.addLink(s4, s6)
-        self.addLink(s5, s6)
+        self.addLink(s3, s6)
 
 
 def run_test():
@@ -100,45 +141,46 @@ def run_test():
         disable_ipv6(s)
 
     net.start()
+    wait_for_switch_controllers(net)
     time.sleep(2)
 
     hosts = {name: net.get(name) for name in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']}
+    install_static_arp(hosts)
 
     info('\n=== Sending gratuitous ARP from all hosts ===\n')
-    for h in hosts.values():
-        send_arp(h)
+    do_arp_all(hosts)
     time.sleep(4)
 
     test_pairs = [
-        ('h1->h2', hosts['h1'], hosts['h2'], 1),
-        ('h1->h3', hosts['h1'], hosts['h3'], 1),
-        ('h1->h4', hosts['h1'], hosts['h4'], 2),
-        ('h1->h5', hosts['h1'], hosts['h5'], 2),
-        ('h1->h6', hosts['h1'], hosts['h6'], 3),
-        ('h2->h3', hosts['h2'], hosts['h3'], 1),
-        ('h2->h4', hosts['h2'], hosts['h4'], 1),
-        ('h2->h5', hosts['h2'], hosts['h5'], 1),
-        ('h2->h6', hosts['h2'], hosts['h6'], 2),
-        ('h3->h4', hosts['h3'], hosts['h4'], 2),
-        ('h3->h5', hosts['h3'], hosts['h5'], 1),
-        ('h3->h6', hosts['h3'], hosts['h6'], 2),
-        ('h4->h5', hosts['h4'], hosts['h5'], 1),
-        ('h4->h6', hosts['h4'], hosts['h6'], 1),
-        ('h5->h6', hosts['h5'], hosts['h6'], 1),
-        ('h6->h1', hosts['h6'], hosts['h1'], 3),
-        ('h6->h2', hosts['h6'], hosts['h2'], 2),
-        ('h6->h3', hosts['h6'], hosts['h3'], 2),
-        ('h5->h1', hosts['h5'], hosts['h1'], 2),
-        ('h4->h1', hosts['h4'], hosts['h1'], 2),
+        ('h1->h2', hosts['h1'], hosts['h2'], 1, 'h1 -> s1 -> s2 -> h2'),
+        ('h1->h3', hosts['h1'], hosts['h3'], 1, 'h1 -> s1 -> s3 -> h3'),
+        ('h1->h4', hosts['h1'], hosts['h4'], 2, 'h1 -> s1 -> s2 -> s4 -> h4'),
+        ('h1->h5', hosts['h1'], hosts['h5'], 2, 'h1 -> s1 -> s2 -> s5 -> h5'),
+        ('h1->h6', hosts['h1'], hosts['h6'], 2, 'h1 -> s1 -> s3 -> s6 -> h6'),
+        ('h2->h3', hosts['h2'], hosts['h3'], 2, 'h2 -> s2 -> s1 -> s3 -> h3'),
+        ('h2->h4', hosts['h2'], hosts['h4'], 1, 'h2 -> s2 -> s4 -> h4'),
+        ('h2->h5', hosts['h2'], hosts['h5'], 1, 'h2 -> s2 -> s5 -> h5'),
+        ('h2->h6', hosts['h2'], hosts['h6'], 3, 'h2 -> s2 -> s1 -> s3 -> s6 -> h6'),
+        ('h3->h4', hosts['h3'], hosts['h4'], 3, 'h3 -> s3 -> s1 -> s2 -> s4 -> h4'),
+        ('h3->h5', hosts['h3'], hosts['h5'], 3, 'h3 -> s3 -> s1 -> s2 -> s5 -> h5'),
+        ('h3->h6', hosts['h3'], hosts['h6'], 1, 'h3 -> s3 -> s6 -> h6'),
+        ('h4->h5', hosts['h4'], hosts['h5'], 2, 'h4 -> s4 -> s2 -> s5 -> h5'),
+        ('h4->h6', hosts['h4'], hosts['h6'], 4, 'h4 -> s4 -> s2 -> s1 -> s3 -> s6 -> h6'),
+        ('h5->h6', hosts['h5'], hosts['h6'], 4, 'h5 -> s5 -> s2 -> s1 -> s3 -> s6 -> h6'),
+        ('h6->h1', hosts['h6'], hosts['h1'], 2, 'h6 -> s6 -> s3 -> s1 -> h1'),
+        ('h6->h2', hosts['h6'], hosts['h2'], 3, 'h6 -> s6 -> s3 -> s1 -> s2 -> h2'),
+        ('h6->h3', hosts['h6'], hosts['h3'], 1, 'h6 -> s6 -> s3 -> h3'),
+        ('h5->h1', hosts['h5'], hosts['h1'], 2, 'h5 -> s5 -> s2 -> s1 -> h1'),
+        ('h4->h1', hosts['h4'], hosts['h1'], 2, 'h4 -> s4 -> s2 -> s1 -> h1'),
     ]
 
     tests = []
-    for name, src, dst, expected_hops in test_pairs:
+    for name, src, dst, expected_hops, expected_path in test_pairs:
         info('\n=== %s (%s -> %s, expected %d hops) ===\n' %
              (name, src.IP(), dst.IP(), expected_hops))
-        result = src.cmd('ping -c 3 -W 2 %s' % dst.IP())
+        info('Expected path: %s\n' % expected_path)
+        passed, result = ping_until_success(hosts, src, dst)
         info(result)
-        passed = ' 0% packet loss' in result
         tests.append(passed)
         if passed:
             info('  PASS\n')

@@ -1,0 +1,145 @@
+<svg width="1600" height="1000" viewBox="0 0 1600 1000" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1600" height="1000" fill="#F7F8FA"/>
+
+  <style>
+    .title { font: 700 34px Arial, sans-serif; fill: #1F2937; }
+    .subtitle { font: 400 18px Arial, sans-serif; fill: #4B5563; }
+    .section { font: 700 24px Arial, sans-serif; fill: #111827; }
+    .label { font: 700 17px Arial, sans-serif; fill: #111827; }
+    .ip { font: 400 13px Arial, sans-serif; fill: #4B5563; }
+    .note { font: 400 15px Arial, sans-serif; fill: #374151; }
+    .small { font: 400 13px Arial, sans-serif; fill: #4B5563; }
+    .rule { font: 700 14px Arial, sans-serif; fill: #991B1B; }
+  </style>
+
+  <text x="70" y="70" class="title">Firewall Topology for SDN Project Demo</text>
+  <text x="70" y="102" class="subtitle">Firewall rules are installed as high-priority OpenFlow drop flows on switches.</text>
+
+  <rect x="60" y="145" width="650" height="360" rx="14" fill="#FFFFFF" stroke="#D1D5DB" stroke-width="2"/>
+  <text x="90" y="190" class="section">Basic Firewall Test</text>
+  <text x="90" y="220" class="note">tests/firewall_test/test_network.py</text>
+
+  <line x1="305" y1="320" x2="430" y2="320" stroke="#6B7280" stroke-width="4"/>
+  <line x1="560" y1="260" x2="430" y2="320" stroke="#6B7280" stroke-width="4"/>
+  <line x1="560" y1="400" x2="430" y2="320" stroke="#6B7280" stroke-width="4"/>
+
+  <rect x="360" y="280" width="140" height="80" rx="10" fill="#DBEAFE" stroke="#2563EB" stroke-width="3"/>
+  <text x="408" y="314" class="label">s1</text>
+  <text x="385" y="338" class="ip">OpenFlow switch</text>
+
+  <circle cx="235" cy="320" r="54" fill="#DCFCE7" stroke="#16A34A" stroke-width="3"/>
+  <text x="213" y="314" class="label">h1</text>
+  <text x="185" y="338" class="ip">192.168.117.2</text>
+
+  <circle cx="625" cy="240" r="54" fill="#FEE2E2" stroke="#DC2626" stroke-width="3"/>
+  <text x="603" y="234" class="label">h2</text>
+  <text x="575" y="258" class="ip">192.168.117.3</text>
+
+  <circle cx="625" cy="420" r="54" fill="#DCFCE7" stroke="#16A34A" stroke-width="3"/>
+  <text x="603" y="414" class="label">h3</text>
+  <text x="575" y="438" class="ip">192.168.117.4</text>
+
+  <path d="M293 285 C370 210 470 195 575 220" stroke="#DC2626" stroke-width="4" stroke-dasharray="9 8" fill="none"/>
+  <text x="305" y="245" class="rule">DROP: h1 -> h2 ICMP</text>
+  <text x="305" y="268" class="rule">DROP: h1 -> h2 TCP/80</text>
+
+  <path d="M292 357 C382 438 486 455 576 431" stroke="#16A34A" stroke-width="4" fill="none"/>
+  <text x="310" y="465" class="small">PASS: h1 -> h3 ICMP</text>
+
+  <rect x="760" y="145" width="780" height="700" rx="14" fill="#FFFFFF" stroke="#D1D5DB" stroke-width="2"/>
+  <text x="790" y="190" class="section">Complex Firewall Test</text>
+  <text x="790" y="220" class="note">tests/firewall_test/test_complex_firewall.py</text>
+
+  <line x1="960" y1="360" x2="1130" y2="290" stroke="#6B7280" stroke-width="4"/>
+  <line x1="960" y1="360" x2="1130" y2="430" stroke="#6B7280" stroke-width="4"/>
+  <line x1="1130" y1="290" x2="1290" y2="220" stroke="#6B7280" stroke-width="4"/>
+  <line x1="1130" y1="290" x2="1290" y2="360" stroke="#6B7280" stroke-width="4"/>
+  <line x1="1130" y1="430" x2="1290" y2="500" stroke="#6B7280" stroke-width="4"/>
+  <line x1="1130" y1="430" x2="1290" y2="640" stroke="#6B7280" stroke-width="4"/>
+
+  <line x1="890" y1="360" x2="960" y2="360" stroke="#6B7280" stroke-width="4"/>
+  <line x1="1130" y1="230" x2="1130" y2="290" stroke="#6B7280" stroke-width="4"/>
+  <line x1="1130" y1="490" x2="1130" y2="430" stroke="#6B7280" stroke-width="4"/>
+  <line x1="1360" y1="220" x2="1290" y2="220" stroke="#6B7280" stroke-width="4"/>
+  <line x1="1360" y1="360" x2="1290" y2="360" stroke="#6B7280" stroke-width="4"/>
+  <line x1="1360" y1="500" x2="1290" y2="500" stroke="#6B7280" stroke-width="4"/>
+  <line x1="1360" y1="640" x2="1290" y2="640" stroke="#6B7280" stroke-width="4"/>
+
+  <rect x="910" y="320" width="100" height="80" rx="10" fill="#DBEAFE" stroke="#2563EB" stroke-width="3"/>
+  <text x="938" y="354" class="label">s1</text>
+  <text x="928" y="378" class="ip">root</text>
+
+  <rect x="1080" y="250" width="100" height="80" rx="10" fill="#DBEAFE" stroke="#2563EB" stroke-width="3"/>
+  <text x="1108" y="284" class="label">s2</text>
+  <text x="1095" y="308" class="ip">to h2</text>
+
+  <rect x="1080" y="390" width="100" height="80" rx="10" fill="#DBEAFE" stroke="#2563EB" stroke-width="3"/>
+  <text x="1108" y="424" class="label">s3</text>
+  <text x="1095" y="448" class="ip">to h7</text>
+
+  <rect x="1240" y="180" width="100" height="80" rx="10" fill="#DBEAFE" stroke="#2563EB" stroke-width="3"/>
+  <text x="1268" y="214" class="label">s4</text>
+
+  <rect x="1240" y="320" width="100" height="80" rx="10" fill="#DBEAFE" stroke="#2563EB" stroke-width="3"/>
+  <text x="1268" y="354" class="label">s5</text>
+
+  <rect x="1240" y="460" width="100" height="80" rx="10" fill="#DBEAFE" stroke="#2563EB" stroke-width="3"/>
+  <text x="1268" y="494" class="label">s6</text>
+
+  <rect x="1240" y="600" width="100" height="80" rx="10" fill="#DBEAFE" stroke="#2563EB" stroke-width="3"/>
+  <text x="1268" y="634" class="label">s7</text>
+
+  <circle cx="835" cy="360" r="48" fill="#DCFCE7" stroke="#16A34A" stroke-width="3"/>
+  <text x="815" y="354" class="label">h1</text>
+  <text x="790" y="378" class="ip">192.168.117.2</text>
+
+  <circle cx="1130" cy="180" r="48" fill="#FEE2E2" stroke="#DC2626" stroke-width="3"/>
+  <text x="1110" y="174" class="label">h2</text>
+  <text x="1085" y="198" class="ip">192.168.117.3</text>
+
+  <circle cx="1130" cy="540" r="48" fill="#DCFCE7" stroke="#16A34A" stroke-width="3"/>
+  <text x="1110" y="534" class="label">h3</text>
+  <text x="1085" y="558" class="ip">192.168.117.4</text>
+
+  <circle cx="1415" cy="220" r="48" fill="#DCFCE7" stroke="#16A34A" stroke-width="3"/>
+  <text x="1395" y="214" class="label">h4</text>
+  <text x="1370" y="238" class="ip">192.168.117.5</text>
+
+  <circle cx="1415" cy="360" r="48" fill="#DCFCE7" stroke="#16A34A" stroke-width="3"/>
+  <text x="1395" y="354" class="label">h5</text>
+  <text x="1370" y="378" class="ip">192.168.117.6</text>
+
+  <circle cx="1415" cy="500" r="48" fill="#DCFCE7" stroke="#16A34A" stroke-width="3"/>
+  <text x="1395" y="494" class="label">h6</text>
+  <text x="1370" y="518" class="ip">192.168.117.7</text>
+
+  <circle cx="1415" cy="640" r="48" fill="#FEE2E2" stroke="#DC2626" stroke-width="3"/>
+  <text x="1395" y="634" class="label">h7</text>
+  <text x="1370" y="658" class="ip">192.168.117.8</text>
+
+  <path d="M883 380 C980 482 1110 537 1240 610 C1305 645 1355 655 1370 645" stroke="#16A34A" stroke-width="6" fill="none"/>
+  <text x="900" y="610" class="small">Baseline shortest path: h1 -> s1 -> s3 -> s7 -> h7</text>
+
+  <path d="M882 334 C990 220 1045 185 1082 180" stroke="#DC2626" stroke-width="5" stroke-dasharray="10 8" fill="none"/>
+  <text x="860" y="270" class="rule">Default DROP: h1 -> h2 ICMP</text>
+
+  <path d="M884 405 C1040 725 1280 760 1390 690" stroke="#B91C1C" stroke-width="5" stroke-dasharray="12 8" fill="none"/>
+  <text x="980" y="735" class="rule">Runtime DROP: h1 -> h7 ICMP, previously reachable becomes unreachable</text>
+
+  <rect x="90" y="545" width="620" height="300" rx="14" fill="#FFFFFF" stroke="#D1D5DB" stroke-width="2"/>
+  <text x="120" y="590" class="section">Legend and Demo Points</text>
+
+  <circle cx="135" cy="635" r="16" fill="#DCFCE7" stroke="#16A34A" stroke-width="3"/>
+  <text x="165" y="641" class="note">Green host/path: expected reachable traffic.</text>
+
+  <circle cx="135" cy="680" r="16" fill="#FEE2E2" stroke="#DC2626" stroke-width="3"/>
+  <text x="165" y="686" class="note">Red host/dashed path: firewall-blocked traffic.</text>
+
+  <rect x="119" y="715" width="32" height="24" rx="4" fill="#DBEAFE" stroke="#2563EB" stroke-width="3"/>
+  <text x="165" y="735" class="note">Blue rectangle: OpenFlow switch controlled by os-ken.</text>
+
+  <line x1="120" y1="770" x2="150" y2="770" stroke="#DC2626" stroke-width="4" stroke-dasharray="8 6"/>
+  <text x="165" y="776" class="note">Dashed red line means traffic is dropped by high-priority flow.</text>
+
+  <text x="120" y="815" class="note">Key OpenFlow evidence: priority=60000, actions=drop.</text>
+</svg>
