@@ -67,6 +67,7 @@ class ControllerApp(app_manager.OSKenApp):
         self.ip_to_mac = {}
         self.ip_to_mac["192.168.1.1"] = "7e:49:b3:f0:f9:99"
         self.flood_history = {}
+        self._warming_switches = set()
 
     def _normalize_mac(self, mac):
         if mac is None:
@@ -105,6 +106,12 @@ class ControllerApp(app_manager.OSKenApp):
 
         if ip and ip != "0.0.0.0":
             self.ip_to_mac[ip] = mac
+
+        if not authoritative and dpid in self._warming_switches:
+            self.logger.debug(
+                'Ignore host learn during topology convergence: mac=%s, dpid=%016x, port=%d',
+                mac, dpid, port_no)
+            return
 
         if self._is_switch_port(dpid, port_no):
             poisoned = self.mac_to_loc.get(mac)
@@ -260,6 +267,7 @@ class ControllerApp(app_manager.OSKenApp):
 
         if dpid not in self.graph:
             self.graph[dpid] = {}
+        self._warming_switches.add(dpid)
 
         ofctl = OfCtl.factory(dp, self.logger)
         ofctl.set_packetin_flow(cookie=0, priority=0)
@@ -280,6 +288,8 @@ class ControllerApp(app_manager.OSKenApp):
         dp = ev.switch.dp
         dpid = dp.id
 
+        neighbors = list(self.graph.get(dpid, {}).keys())
+
         if dpid in self.graph:
             del self.graph[dpid]
 
@@ -290,8 +300,12 @@ class ControllerApp(app_manager.OSKenApp):
         if dpid in self.dpid_to_dp:
             del self.dpid_to_dp[dpid]
 
+        for neighbor_dpid in neighbors:
+            self._warming_switches.add(neighbor_dpid)
+
         self._remove_host_locations_on_switch(dpid)
         self._clear_forwarding_flows()
+        self._warming_switches.discard(dpid)
 
         self.logger.info('Switch left: dpid=%016x', dpid)
 
@@ -311,6 +325,12 @@ class ControllerApp(app_manager.OSKenApp):
         mac = host.mac
         dpid = host.port.dpid
         port = host.port.port_no
+
+        if dpid in self._warming_switches and self._is_switch_port(dpid, port):
+            self.logger.debug(
+                'Ignore host add on switch-facing port during convergence: mac=%s, dpid=%016x, port=%d',
+                mac, dpid, port)
+            return
 
         self._learn_host(mac, dpid, port, authoritative=True)
 
@@ -348,6 +368,8 @@ class ControllerApp(app_manager.OSKenApp):
 
         self.graph[src_dpid][dst_dpid] = src_port
         self.graph[dst_dpid][src_dpid] = dst_port
+        self._warming_switches.discard(src_dpid)
+        self._warming_switches.discard(dst_dpid)
 
         if old_src_port == src_port and old_dst_port == dst_port:
             self.logger.info('Link already known: %016x:%d <-> %016x:%d',
@@ -378,6 +400,8 @@ class ControllerApp(app_manager.OSKenApp):
         if dst_dpid in self.graph and src_dpid in self.graph[dst_dpid]:
             del self.graph[dst_dpid][src_dpid]
 
+        self._warming_switches.add(src_dpid)
+        self._warming_switches.add(dst_dpid)
         self._clear_forwarding_flows()
         self._scrub_poisoned_host_locations()
         self.logger.info('Link deleted: %016x <-> %016x', src_dpid, dst_dpid)
@@ -399,7 +423,12 @@ class ControllerApp(app_manager.OSKenApp):
         removed_links = self._remove_links_for_port(dpid, port_no)
         self._remove_host_locations_on_port(dpid, port_no)
         if removed_links:
+            self._warming_switches.add(dpid)
+            for src, dst in removed_links:
+                self._warming_switches.add(src)
+                self._warming_switches.add(dst)
             self._clear_forwarding_flows()
+            self._scrub_poisoned_host_locations()
             self.logger.info('Port status changed: dpid=%016x, port=%d, removed_links=%s',
                              dpid, port_no, removed_links)
         else:

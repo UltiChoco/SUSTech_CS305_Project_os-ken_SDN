@@ -353,6 +353,14 @@ sudo env "PATH=$PATH" python test_network.py
 # Mininet CLI: pingall
 ```
 
+<p align="center">
+  <img src="./img/switching_basic_pingall.png" width="80%"/>
+</p>
+
+<p align="center">
+  <b>Figure 3. Basic triangle-topology connectivity (`pingall`, 0% packet loss).</b>
+</p>
+
 ### 4. Complex Test (8 Hosts, 8 Switches, Loops)
 
 To satisfy the project requirement for a complex testcase (>6 hosts, >6 switches, >10 edges, loops, and dynamic topology changes), we implemented `tests/switching_test/test_complex_shortest_path.py`.
@@ -374,7 +382,7 @@ Hosts use addresses `192.168.10.1` – `192.168.10.8/24`. The topology figure is
 </p>
 
 <p align="center">
-  <b>Figure 3. Complex shortest-path test topology (8 hosts, 8 switches, 10 inter-switch links).</b>
+  <b>Figure 4. Complex shortest-path test topology (8 hosts, 8 switches, 10 inter-switch links).</b>
 </p>
 
 #### 4.2 Expected Baseline Paths
@@ -435,7 +443,7 @@ All **10/10** automated cases passed in our Mininet VM (`cs305` environment), in
 </p>
 
 <p align="center">
-  <b>Figure 4. Automated complex shortest-path test result (10/10 passed).</b>
+  <b>Figure 5. Automated complex shortest-path test result (10/10 passed).</b>
 </p>
 
 ## Firewall Implementation
@@ -535,9 +543,17 @@ The test starts HTTP servers on `h2` at port `80` and port `8080`, then checks f
 
 This test verifies that the firewall can distinguish traffic by IP address, protocol, and transport-layer port.
 
+<p align="center">
+  <img src="./img/firewall_basic_test.png" width="88%"/>
+</p>
+
+<p align="center">
+  <b>Figure 6. Basic firewall test: ICMP deny to h2, ICMP pass to h3, and TCP port filtering (80 blocked, 8080 allowed).</b>
+</p>
+
 ### 5. Complex Firewall Test
 
-To satisfy the demo requirement for firewall behavior on a multi-switch topology, we designed `tests/firewall_test/test_complex_firewall.py`. It reuses the **same shortest-path switching logic** on a related multi-hop graph (7 hosts / 7 switches). Our **shortest-path complex demo** uses the larger **8-host loop topology** in `tests/switching_test/test_complex_shortest_path.py` (see Figure 3).
+To satisfy the demo requirement for firewall behavior on a multi-switch topology, we designed `tests/firewall_test/test_complex_firewall.py`. It reuses the **same shortest-path switching logic** on a related multi-hop graph (7 hosts / 7 switches). Our **shortest-path complex demo** uses the larger **8-host loop topology** in `tests/switching_test/test_complex_shortest_path.py` (see Figure 4).
 
 The firewall complex topology is:
 
@@ -595,6 +611,14 @@ The final run completed with return code `0`. The important output is summarized
 [PASS] default firewall still blocks h1 -> h2 after s5 restart expected blocked
 [PASS] unrelated h1 -> h7 traffic still works after s5 restart expected reachable
 ```
+
+<p align="center">
+  <img src="./img/firewall_complex_test.png" width="88%"/>
+</p>
+
+<p align="center">
+  <b>Figure 7. Complex firewall test: baseline reachability, default deny, runtime drop, and recovery after rule removal.</b>
+</p>
 
 After restarting `s5`, the flow table still contains the default firewall rules:
 
@@ -841,7 +865,7 @@ h1 (sender) --- s1 ========== s2 --- h2 (receiver)
 </p>
 
 <p align="center">
-  <b>Figure 5. TCP Throughput Comparison: Reno vs Cubic (Bottleneck: 10 Mbps, 20 ms RTT).</b>
+  <b>Figure 8. TCP Throughput Comparison: Reno vs Cubic (Bottleneck: 10 Mbps, 20 ms RTT).</b>
 </p>
 
 #### 1.5 Congestion Window Analysis
@@ -853,7 +877,7 @@ Reno exhibits the classic **AIMD sawtooth pattern**: cwnd grows linearly until i
 </p>
 
 <p align="center">
-  <b>Figure 6. Congestion Window Evolution: Reno AIMD Sawtooth (top) vs Cubic Growth + Fast Recovery (bottom).</b>
+  <b>Figure 9. Congestion Window Evolution: Reno AIMD Sawtooth (top) vs Cubic Growth + Fast Recovery (bottom).</b>
 </p>
 
 #### 1.6 Conclusion
@@ -903,7 +927,7 @@ h3 (ping) ---/    10Mbps, 10ms
 </p>
 
 <p align="center">
-  <b>Figure 7. Bufferbloat Comparison: Small Buffer (top, 20 pkts) vs Large Buffer (bottom, 200 pkts).</b>
+  <b>Figure 10. Bufferbloat Comparison: Small Buffer (top, 20 pkts) vs Large Buffer (bottom, 200 pkts).</b>
 </p>
 
 #### 2.5 Analysis
