@@ -683,13 +683,12 @@ The NAT processing is integrated at two points in the controller:
 
 When an internal host sends an ARP request for an external IP (i.e., destination is outside `192.168.1.0/24`), the controller responds with the NAT gateway MAC address (`7e:49:b3:f0:f9:99`):
 
-```text
-Internal Host                    Controller
-    |  ARP request: who-has 10.0.0.2?   |
-    |  ---------------------------------> |
-    |                                     |
-    |  ARP reply: 10.0.0.2 is-at NAT-MAC |
-    |  <--------------------------------- |
+```mermaid
+sequenceDiagram
+    participant H as Internal Host
+    participant C as Controller
+    H->>C: ARP request: who-has 10.0.0.2?
+    C->>H: ARP reply: 10.0.0.2 is-at NAT-MAC
 ```
 
 This is implemented in `controller.py` `_handle_arp()`, which checks `NATServer.is_internal(src_ip)` and `NATServer.is_external(dst_ip)` before normal ARP proxy logic.
@@ -935,14 +934,3 @@ These experiments demonstrate Mininet's capability as a network teaching and res
 | `experiments/data/*.txt` | Raw experiment data (iperf & ping logs) |
 | `experiments/charts/*.png` | Generated charts (3 figures) |
 
-### Running the Experiments
-
-```bash
-# Collect real data (requires sudo)
-sudo env "PATH=$PATH" python experiments/tcp_cc_test.py
-sudo env "PATH=$PATH" python experiments/bufferbloat_test.py
-
-# Generate charts
-cd experiments
-uv run python analyze.py
-```
